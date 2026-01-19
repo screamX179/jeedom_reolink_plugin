@@ -70,6 +70,15 @@ try {
       ajax::success();
     }
 
+    if (init('action') == 'SyncHomeHubCameras') {
+        $res = reolink::discoverAndCreateCamerasFromAPI(init('id'));
+        if ($res === true) {
+          ajax::success();
+        } else {
+          throw new Exception(__('Erreur lors de la synchronisation des caméras', __FILE__));
+        }
+    }
+
     throw new Exception(__('Aucune méthode correspondante à : ', __FILE__) . init('action'));
     /*     * *********Catch exeption*************** */
 } catch (Exception $e) {

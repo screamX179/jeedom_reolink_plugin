@@ -50,8 +50,19 @@ if (!isConnect()) {
       </div>
     </div>
     <div class="form-group">
+      <label class="col-md-4 control-label">{{Mode de détection de mouvement}}
+        <sup><i class="fas fa-question-circle tooltips" title="{{Protocole utilisé pour la détection de mouvement : ONVIF (standard) ou TCP/Baichuan (natif Reolink, peut être plus réactif)}}"></i></sup>
+      </label>
+      <div class="col-md-4">
+        <select class="configKey form-control" data-l1key="detection_mode">
+            <option value="onvif">ONVIF</option>
+            <option value="baichuan">TCP/Baichuan</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
       <label class="col-md-4 control-label">{{IP de callback du webhook}}
-        <sup><i class="fas fa-question-circle tooltips" title="{{IP vers laquelle les caméras vont renvoyer les évènement détections de mouvement. (IP permettant d'accéder au webhook du daemon du plugin)}}"></i></sup>
+        <sup><i class="fas fa-question-circle tooltips" title="{{IP vers laquelle les caméras vont renvoyer les évènement détections de mouvement. (IP permettant d'accéder au webhook du daemon du plugin) (mode ONVIF)}}"></i></sup>
       </label>
       <div class="col-md-4">
         <select class="configKey form-control" data-l1key="ipwebhook">
@@ -64,7 +75,7 @@ if (!isConnect()) {
     </div>
     <div class="form-group">
       <label class="col-md-4 control-label">{{IP personnalisée}}
-        <sup><i class="fas fa-question-circle tooltips" title="{{IP utilisée pour le rappel du daemon, lorsque vous sélectionner l'option : 'Personnalisée'}}"></i></sup>
+        <sup><i class="fas fa-question-circle tooltips" title="{{IP utilisée pour le rappel du daemon, lorsque vous sélectionner l'option : 'Personnalisée' (mode ONVIF)}}"></i></sup>
       </label>
       <div class="col-md-4">
         <input class="configKey form-control" data-l1key="webhookdefinedip" />
@@ -72,10 +83,18 @@ if (!isConnect()) {
     </div>
     <div class="form-group">
       <label class="col-md-4 control-label">{{Port du webhook}}
-        <sup><i class="fas fa-question-circle tooltips" title="{{Port du webhook du daemon utilisé par les caméras lors de la détection des mouvements}}"></i></sup>
+        <sup><i class="fas fa-question-circle tooltips" title="{{Port du webhook du daemon utilisé par les caméras lors de la détection des mouvements (mode ONVIF)}}"></i></sup>
       </label>
       <div class="col-md-4">
         <input class="configKey form-control" data-l1key="webhookport" value="44010" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="col-md-4 control-label">{{Port de l'API Reolink AIO}}
+        <sup><i class="fas fa-question-circle tooltips" title="{{Port utilisé par l'API interne Reolink AIO pour communiquer avec les caméras (mode TCP/Baichuan)}}"></i></sup>
+      </label>
+      <div class="col-md-4">
+        <input class="configKey form-control" data-l1key="reolink_aio_api_port" value="44011" />
       </div>
     </div>
   </fieldset>

@@ -45,6 +45,16 @@ class reolink extends eqLogic {
   }
 
   public static function TryConnect($id) {
+    $camera = reolink::byId($id, 'reolink');
+    
+    // Vérifier si c'est une caméra sous HomeHub
+    $parentHubId = $camera->getConfiguration('parent_hub_id');
+    if (!empty($parentHubId)) {
+      log::add('reolink', 'info', 'Test de connexion à la caméra HomeHub via API');
+      return reolink::TryConnectHomeHubCamera($id);
+    }
+    
+    // Sinon, utiliser la méthode classique
     $reolinkConn = reolink::getReolinkConnection($id);
     if ($reolinkConn->is_loggedin == true) {
       log::add('reolink', 'info', 'Connection à la caméra réussie');
@@ -55,10 +65,317 @@ class reolink extends eqLogic {
     }
   }
 
+  /**
+   * Prépare les credentials du HomeHub pour un appel API
+   * @return array|false Retourne les credentials ou false en cas d'erreur
+   */
+  private static function prepareHomeHubCredentials($cameraId) {
+    $camera = reolink::byId($cameraId, 'reolink');
+    
+    $parentHubId = $camera->getConfiguration('parent_hub_id');
+    $channelId = $camera->getConfiguration('defined_channel');
+    
+    if (empty($parentHubId) || $channelId === null) {
+      log::add('reolink', 'error', 'Caméra HomeHub mal configurée: parent_hub_id ou defined_channel manquant');
+      return false;
+    }
+    
+    // Récupérer les informations du HomeHub parent
+    $homeHub = reolink::byId($parentHubId, 'reolink');
+    if (!is_object($homeHub)) {
+      log::add('reolink', 'error', 'HomeHub parent non trouvé: ID=' . $parentHubId);
+      return false;
+    }
+    
+    return array(
+      'channel_id' => $channelId,
+      'credentials' => array(
+        'host' => $homeHub->getConfiguration('adresseip'),
+        'username' => $homeHub->getConfiguration('login'),
+        'password' => $homeHub->getConfiguration('password'),
+        'port' => intval($homeHub->getConfiguration('port', 80)),
+        'use_https' => $homeHub->getConfiguration('cnxtype') == 'https'
+      )
+    );
+  }
+
+  /**
+   * Prépare les credentials pour un équipement (HomeHub ou caméra)
+   * @param int $deviceId ID de l'équipement
+   * @return array Credentials de connexion
+   */
+  private static function getDeviceCredentials($deviceId) {
+    $device = reolink::byId($deviceId, 'reolink');
+    return array(
+      'host' => $device->getConfiguration('adresseip'),
+      'username' => $device->getConfiguration('login'),
+      'password' => $device->getConfiguration('password'),
+      'port' => intval($device->getConfiguration('port', 80)),
+      'use_https' => $device->getConfiguration('cnxtype') == 'https'
+    );
+  }
+
+  /**
+   * Vérifie si un équipement est un HomeHub/NVR
+   * @param int $deviceId ID de l'équipement
+   * @param string $functionName Nom de la fonction appelante (pour les logs)
+   * @return bool True si c'est un HomeHub, False sinon
+   */
+  private static function isHomeHub($deviceId, $functionName = '') {
+    $device = reolink::byId($deviceId, 'reolink');
+    $isNVR = $device->getConfiguration('isNVR');
+    
+    if ($isNVR !== 'Oui') {
+      if (!empty($functionName)) {
+        log::add('reolink', 'warning', $functionName . ' appelé sur un équipement qui n\'est pas un HomeHub');
+      }
+      return false;
+    }
+    
+    return true;
+  }
+
+  /**
+   * Masque les informations sensibles dans les credentials pour les logs
+   * @param array $credentials Credentials à masquer
+   * @return string Version sécurisée pour les logs
+   */
+  private static function maskCredentialsForLog($credentials) {
+    if (!is_array($credentials)) {
+      return 'Invalid credentials';
+    }
+    
+    $safe = array(
+      'host' => $credentials['host'] ?? 'unknown',
+      'port' => $credentials['port'] ?? 'unknown',
+      'username' => isset($credentials['username']) ? substr($credentials['username'], 0, 3) . '***' : 'unknown',
+      'password' => '***',
+      'use_https' => $credentials['use_https'] ?? false
+    );
+    
+    // Ajouter scene_id si présent (pas sensible)
+    if (isset($credentials['scene_id'])) {
+      $safe['scene_id'] = $credentials['scene_id'];
+    }
+    
+    return json_encode($safe);
+  }
+
+  /**
+   * Appel générique à l'API Reolink (reolink-aio)
+   */
+  private static function callReolinkAioAPI($endpoint, $credentials, $timeout = 30) {
+    $apiPort = config::byKey('reolink_aio_api_port', __CLASS__, '44011');
+    $apiUrl = 'http://127.0.0.1:' . $apiPort . $endpoint;
+    
+    log::add('reolink', 'debug', 'Appel API Reolink: ' . $apiUrl . ' avec credentials: ' . self::maskCredentialsForLog($credentials));
+    
+    $ch = curl_init($apiUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($credentials));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
+    curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+    
+    if ($httpCode != 200 || !$response) {
+      $errorMsg = 'Erreur API Reolink ' . $endpoint . ' (HTTP ' . $httpCode . ')';
+      if ($curlError) {
+        $errorMsg .= ' - Erreur curl: ' . $curlError;
+      }
+      if ($response) {
+        $errorMsg .= ' - Réponse: ' . substr($response, 0, 200);
+      }
+      log::add('reolink', 'error', $errorMsg);
+      return false;
+    }
+    
+    $result = json_decode($response, true);
+    if (!$result) {
+      log::add('reolink', 'error', 'Réponse API invalide pour ' . $endpoint . ' (pas un JSON valide)');
+      return false;
+    }
+    
+    return $result;
+  }
+
+  /**
+   * Teste la connexion à une caméra via l'API HomeHub
+   */
+  private static function TryConnectHomeHubCamera($id) {
+    $config = reolink::prepareHomeHubCredentials($id);
+    if (!$config) {
+      return false;
+    }
+    
+    $endpoint = '/reolink/camera/' . $config['channel_id'] . '/test-connection';
+    $result = reolink::callReolinkAioAPI($endpoint, $config['credentials']);
+    
+    if (!$result) {
+      return false;
+    }
+    
+    if ($result['success']) {
+      log::add('reolink', 'info', 'Connexion à la caméra ' . $result['camera_name'] . ' (canal ' . $config['channel_id'] . ') réussie');
+      return true;
+    } else {
+      log::add('reolink', 'error', 'Échec connexion caméra: ' . $result['error']);
+      return false;
+    }
+  }
+
+  /**
+   * Télécharge l'icône d'une caméra depuis le CDN Reolink
+   */
+  private static function downloadCameraIcon($cameraId, $modelName) {
+    $modelURL = urlencode($modelName);
+    $iconurl = "https://cdn.reolink.com/wp-content/assets/app/model-images/$modelURL/light_off.png";
+    
+    $dir = realpath(dirname(__FILE__) . '/../../desktop');
+    
+    if (!file_exists($dir . '/img')) {
+      mkdir($dir . '/img', 0775, true);
+      log::add('reolink', 'debug', 'Création du répertoire visuel caméra = ' . $dir . '/img');
+    }
+    
+    $fileToWrite = $dir . '/img/camera' . $cameraId . '.png';
+    
+    log::add('reolink', 'debug', 'Enregistrement du visuel de la caméra ' . $modelName . ' depuis serveur Reolink (' . $iconurl . ' => ' . $fileToWrite . ')');
+    
+    $ch = curl_init($iconurl);
+    curl_setopt($ch, CURLOPT_HEADER, false);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_BINARYTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    $rawdata = curl_exec($ch);
+    
+    $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpcode == 200) {
+      log::add('reolink', 'debug', 'HTTP code 200 OK');
+      $fp = fopen($fileToWrite, 'w');
+      fwrite($fp, $rawdata);
+      fclose($fp);
+      log::add('reolink', 'debug', 'Ecriture OK');
+      return $iconurl;
+    } else {
+      log::add('reolink', 'error', 'HTTP code ' . $httpcode . ' NOK');
+      return false;
+    }
+  }
+
+  /**
+   * Traite et enregistre les informations d'une caméra
+   */
+  private static function processCameraInfo($cameraId, $devInfo, $p2pUid, $localLink, $aiSupported, $netPort) {
+    $camera = reolink::byId($cameraId, 'reolink');
+    
+    // Traiter DevInfo
+    if ($devInfo) {
+      foreach ($devInfo as $key => $value) {
+        log::add('reolink', 'debug', 'Enregistrement : K=' . $key . ' V=' . $value);
+        $camera->setConfiguration($key, $value);
+        
+        if ($key == "model") {
+          $iconurl = reolink::downloadCameraIcon($cameraId, $value);
+          if ($iconurl) {
+            $camera->setConfiguration("camicon", $iconurl);
+          }
+        }
+      }
+    }
+    
+    // Traiter P2P uid
+    if ($p2pUid) {
+      log::add('reolink', 'debug', 'Enregistrement : K=uid V=' . $p2pUid);
+      $camera->setConfiguration("uid", $p2pUid);
+    }
+    
+    // Traiter LocalLink
+    if ($localLink) {
+      log::add('reolink', 'debug', 'Enregistrement : K=linkconnection V=' . $localLink);
+      $camera->setConfiguration("linkconnection", $localLink);
+    }
+    
+    // Traiter AI support
+    $camera->setConfiguration("supportai", $aiSupported ? "Oui" : "Non");
+    
+    // Traiter NetPort
+    if ($netPort) {
+      foreach ($netPort as $key => $value) {
+        log::add('reolink', 'debug', 'Enregistrement : K=' . $key . ' V=' . $value);
+        
+        if (strpos($key, 'Enable') !== false) {
+          $value = str_replace("0", "(désactiver)", $value);
+          $value = str_replace("1", "(actif)", $value);
+        }
+        
+        $camera->setConfiguration($key, $value);
+      }
+    }
+    
+    $camera->Save();
+    return true;
+  }
+
+  /**
+   * Récupère les informations d'une caméra via l'API HomeHub
+   */
+  private static function GetCamNFOFromHomeHub($id) {
+    log::add('reolink', 'debug', 'Récupération des informations via API HomeHub');
+    
+    $config = reolink::prepareHomeHubCredentials($id);
+    if (!$config) {
+      return false;
+    }
+    
+    $endpoint = '/reolink/camera/' . $config['channel_id'] . '/full_info';
+    $fullInfo = reolink::callReolinkAioAPI($endpoint, $config['credentials']);
+    
+    if (!$fullInfo) {
+      return false;
+    }
+    
+    log::add('reolink', 'debug', 'Informations reçues de l\'API: ' . print_r($fullInfo, true));
+    
+    // Extraire les informations
+    $devInfo = isset($fullInfo['DevInfo']) ? $fullInfo['DevInfo'] : null;
+    $p2pUid = isset($fullInfo['P2p']['uid']) ? $fullInfo['P2p']['uid'] : null;
+    $localLink = isset($fullInfo['LocalLink']['activeLink']) ? $fullInfo['LocalLink']['activeLink'] : null;
+    $aiSupported = isset($fullInfo['capabilities']['ai_supported']) ? $fullInfo['capabilities']['ai_supported'] : false;
+    $netPort = isset($fullInfo['NetPort']) ? $fullInfo['NetPort'] : null;
+    
+    // Traiter les informations
+    $result = reolink::processCameraInfo($id, $devInfo, $p2pUid, $localLink, $aiSupported, $netPort);
+    
+    if ($result) {
+      log::add('reolink', 'info', 'Informations récupérées avec succès via API HomeHub');
+    }
+    
+    return $result;
+  }
+
   public static function GetCamNFO($id) {
     log::add('reolink', 'debug', 'Obtention des informations de la caméra');
     $camera = reolink::byId($id, 'reolink');
 
+    // Vérifier si c'est une caméra sous HomeHub
+    $parentHubId = $camera->getConfiguration('parent_hub_id');
+    if (!empty($parentHubId)) {
+      log::add('reolink', 'info', 'Caméra sous HomeHub détectée, utilisation de l\'API reolink-aio');
+      return reolink::GetCamNFOFromHomeHub($id);
+    }
+
+    // Sinon, utiliser la méthode classique par connexion directe
+    log::add('reolink', 'debug', 'Caméra autonome, connexion directe');
+    
     // Devices Info
     $reolinkConn = reolink::getReolinkConnection($id);
     $deviceInfo = $reolinkConn->SendCMD('[{"cmd":"GetDevInfo"},{"cmd":"GetP2P"},{"cmd":"GetLocalLink"},{"cmd":"GetAiState"},{"cmd":"GetNetPort"}]');
@@ -67,99 +384,119 @@ class reolink extends eqLogic {
       return false;
     }
 
-    foreach ($deviceInfo[0]['value']["DevInfo"] as $key => $value) {
+    // Extraire les informations depuis la réponse
+    $devInfo = $deviceInfo[0]['value']["DevInfo"];
+    $p2pUid = $deviceInfo[1]['value']["P2p"]['uid'];
+    $localLink = $deviceInfo[2]['value']["LocalLink"]['activeLink'];
+    $aiSupported = isset($deviceInfo[3]['value']);
+    $netPort = $deviceInfo[4]['value']['NetPort'];
+    
+    // Traiter les informations avec la fonction commune
+    reolink::processCameraInfo($id, $devInfo, $p2pUid, $localLink, $aiSupported, $netPort);
 
-      log::add('reolink', 'debug', 'Enregistrement : K=' . $key . ' V=' . $value);
-      $camera->setConfiguration($key, $value);
-
-      if ($key == "model") {
-        // Download CAM img ICON
-        $modelURL = urlencode($value);
-        $iconurl = "https://cdn.reolink.com/wp-content/assets/app/model-images/$modelURL/light_off.png";
-        $camera->setConfiguration("camicon", $iconurl);
-
-        $dir = realpath(dirname(__FILE__) . '/../../desktop');
-
-        if (!file_exists($dir . '/img')) {
-          mkdir($dir . '/img', 0775, true);
-          log::add('reolink', 'debug', 'Création du répertoire visuel caméra = ' . $dir . '/img');
+    log::add('reolink', 'debug', 'GetDeviceInfo ajout de ' . count($devInfo) . ' items');
+    if (count($devInfo) > 1) {
+      $camera = reolink::byId($id, 'reolink');
+      
+      // Détecter si c'est un HomeHub/NVR
+      $model = $camera->getConfiguration('model', '');
+      $isHomeHub = false;
+      
+      // Détection basée sur le modèle ou le nombre de canaux
+      if (stripos($model, 'RLN') !== false || stripos($model, 'HomeHub') !== false) {
+        $isHomeHub = true;
+      } else {
+        // Vérifier via GetChannelStatus
+        $channelStatus = $reolinkConn->SendCMD('[{"cmd":"GetChannelStatus"}]');
+        if ($channelStatus && isset($channelStatus[0]['value']['status'])) {
+          $channels = $channelStatus[0]['value']['status'];
+          if (is_array($channels) && count($channels) > 1) {
+            $isHomeHub = true;
+          }
         }
-
-        $fileToWrite = $dir . '/img/camera' . $id . '.png';
-
-        log::add('reolink', 'debug', 'Enregistrement du visuel de la caméra ' . $value . ' depuis serveur Reolink (' . $iconurl . ' => ' . $fileToWrite . ')');
-
-        $ch = curl_init($iconurl);
-        curl_setopt($ch, CURLOPT_HEADER, false);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_BINARYTRANSFER, true);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        $rawdata = curl_exec($ch);
-
-        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $header_size = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        $header = substr($rawdata, 0, $header_size);
-
-        if ($httpcode == 200) {
-          log::add('reolink', 'debug', 'HTTP code 200 OK');
-        } else {
-          log::add('reolink', 'error', 'HTTP code ' . $httpcode . ' NOK ' . curl_error($ch) . ' Entête : ' . $header);
-          return false;
-        }
-        curl_close($ch);
-        $fp = fopen($fileToWrite, 'w');
-        fwrite($fp, $rawdata);
-        fclose($fp);
-        log::add('reolink', 'debug', 'Ecriture OK');
       }
-    }
-
-    // Alone value
-    $value = $deviceInfo[1]['value']["P2p"]['uid'];
-    log::add('reolink', 'debug', 'Enregistrement : K=uid V=' . $value);
-    $camera->setConfiguration("uid", $value);
-
-    $value = $deviceInfo[2]['value']["LocalLink"]['activeLink'];
-    log::add('reolink', 'debug', 'Enregistrement : K=linkconnection V=' . $value);
-    $camera->setConfiguration("linkconnection", $value);
-
-    // Check if cam is AI
-    if (isset($deviceInfo[3]['value'])) {
-      // Cam is AI
-      $camera->setConfiguration("supportai", "Oui");
-    } else {
-      // Cam is not AI
-      $camera->setConfiguration("supportai", "Non");
-    }
-
-    // Save cam port
-    foreach ($deviceInfo[4]['value']['NetPort'] as $key => $value) {
-      log::add('reolink', 'debug', 'Enregistrement : K=' . $key . ' V=' . $value);
-
-      if (strpos($key, 'Enable') !== false) {
-        $value = str_replace("0", "(désactiver)", $value);
-        $value = str_replace("1", "(actif)", $value);
+      
+      if ($isHomeHub) {
+        log::add('reolink', 'info', 'HomeHub/NVR détecté : ' . $model);
+        $camera->setConfiguration('isNVR', 'Oui');
+        $camera->Save();
+      } else {
+        $camera->setConfiguration('isNVR', 'Non');
+        $camera->Save();
       }
-
-      $camera->setConfiguration($key, $value);
-    }
-
-
-    log::add('reolink', 'debug', 'GetDeviceInfo ajout de ' . count($deviceInfo[0]['value']["DevInfo"]) . ' items');
-    if (count($deviceInfo[0]['value']["DevInfo"]) > 1) {
-      $camera->Save();
+      
       return true;
     } else {
       return false;
     }
   }
 
+  /**
+   * Récupère les capacités d'une caméra HomeHub via l'API
+   */
+  private static function GetCamAbilityFromHomeHub($id) {
+    log::add('reolink', 'debug', 'Récupération des capacités via API HomeHub');
+    
+    $config = reolink::prepareHomeHubCredentials($id);
+    if (!$config) {
+      return false;
+    }
+    
+    $endpoint = '/reolink/camera/' . $config['channel_id'] . '/ability';
+    $abilities = reolink::callReolinkAioAPI($endpoint, $config['credentials']);
+    
+    if (!$abilities) {
+      return false;
+    }
+    
+    log::add('reolink', 'debug', 'Capacités reçues de l\'API: ' . print_r($abilities, true));
+    log::add('reolink', 'debug', 'GetAbility à récupérer : ' . count($abilities) . ' items');
+    
+    return $abilities;
+  }
+
+  /**
+   * Récupère les capacités d'un HomeHub via l'API
+   */
+  private static function GetHomeHubAbility($id) {
+    log::add('reolink', 'debug', 'Récupération des capacités du HomeHub via API');
+    
+    // Utiliser l'endpoint spécifique au HomeHub (sans channel, utilise None côté Python)
+    $endpoint = '/reolink/nvr/ability';
+    $credentials = reolink::getDeviceCredentials($id);
+    $abilities = reolink::callReolinkAioAPI($endpoint, $credentials);
+    
+    if (!$abilities) {
+      return false;
+    }
+    
+    log::add('reolink', 'debug', 'Capacités HomeHub reçues de l\'API: ' . print_r($abilities, true));
+    log::add('reolink', 'debug', 'GetAbility à récupérer : ' . count($abilities) . ' items');
+    
+    return $abilities;
+  }
+
   public static function GetCamAbility($id) {
     log::add('reolink', 'debug', 'Interrogation de la caméra sur ses capacités hardware/software...');
-    $reolinkConn = reolink::getReolinkConnection($id);
     $camera = reolink::byId($id, 'reolink');
+    
+    // Vérifier si c'est une caméra sous HomeHub
+    $parentHubId = $camera->getConfiguration('parent_hub_id');
+    if (!empty($parentHubId)) {
+      log::add('reolink', 'info', 'Caméra sous HomeHub détectée, utilisation de l\'API reolink-aio');
+      return reolink::GetCamAbilityFromHomeHub($id);
+    }
+    
+    // Vérifier si c'est un HomeHub lui-même
+    $isNVR = $camera->getConfiguration('isNVR');
+    if ($isNVR === 'Oui') {
+      log::add('reolink', 'info', 'HomeHub/NVR détecté, utilisation de l\'API reolink-aio');
+      return reolink::GetHomeHubAbility($id);
+    }
+    
+    // Sinon, utiliser la méthode classique par connexion directe
+    log::add('reolink', 'debug', 'Caméra autonome, connexion directe');
+    $reolinkConn = reolink::getReolinkConnection($id);
 
     $username = $camera->getConfiguration('login');
     if (empty($username)) {
@@ -170,7 +507,7 @@ class reolink extends eqLogic {
     if (is_object($reolinkConn)) {
       $deviceAbility = $reolinkConn->SendCMD('[{"cmd":"GetAbility","param":{"User":{"userName":"' . $username . '"}}}]');
 
-      log::add('reolink', 'debug', print_r($deviceAbility, true));
+      //log::add('reolink', 'debug', print_r($deviceAbility, true));
 
       $ab1 = $deviceAbility[0]["value"]["Ability"];
       unset($ab1["abilityChn"]);
@@ -212,42 +549,385 @@ class reolink extends eqLogic {
     }
   }
 
+  /**
+   * Récupère la liste des scènes depuis le HomeHub et met à jour la commande
+   */
+  public static function updateScenes($id) {
+    // Vérifier que c'est bien un HomeHub
+    if (!reolink::isHomeHub($id, 'updateScenes')) {
+      return false;
+    }
+    
+    $device = reolink::byId($id, 'reolink');
+    $cmd = $device->getCmd(null, 'SetScene');
+    if (!is_object($cmd)) {
+      log::add('reolink', 'error', 'Commande SetScene non trouvée');
+      return false;
+    }
+    
+    // Appeler l'API pour récupérer les scènes
+    $endpoint = '/reolink/scenes';
+    $credentials = reolink::getDeviceCredentials($id);
+    $response = reolink::callReolinkAioAPI($endpoint, $credentials);
+    
+    if (!$response || !isset($response['scenes'])) {
+      log::add('reolink', 'error', 'Échec de la récupération des scènes');
+      return false;
+    }
+    
+    $sceneList = "-1|Désactiver les scènes";
+    log::add('reolink', 'debug', 'Scènes à parser = ' . print_r($response['scenes'], true));
+    
+    foreach ($response['scenes'] as $scene_id => $scene_name) {
+      // Ne pas inclure la scène -1 (off) dans la liste
+      if ($scene_id >= 0) {
+        log::add('reolink', 'debug', 'Ajout de la scène = ' . $scene_id . '|' . $scene_name);
+        $sceneList .= ";" . $scene_id . '|' . $scene_name;
+      }
+    }
+    
+    $cmd->setConfiguration('listValue', $sceneList);
+    $cmd->save();
+    $device->refreshWidget();
+    
+    log::add('reolink', 'info', 'Scènes mises à jour avec succès');
+    return true;
+  }
+
+  /**
+   * Active une scène sur le HomeHub
+   */
+  public static function setScene($id, $scene_id) {
+    // Vérifier que c'est bien un HomeHub
+    if (!reolink::isHomeHub($id, 'setScene')) {
+      return false;
+    }
+    
+    log::add('reolink', 'debug', 'Activation de la scène: ' . $scene_id);
+    
+    // Préparer le payload avec credentials et scene_id
+    $credentials = reolink::getDeviceCredentials($id);
+    $payload = array_merge(
+      array('scene_id' => intval($scene_id)),
+      $credentials
+    );
+    
+    // Appeler l'API pour activer la scène
+    $result = reolink::callReolinkAioAPI('/reolink/scene/set', $payload);
+    
+    if (!$result || !isset($result['success']) || !$result['success']) {
+      log::add('reolink', 'error', 'Échec de l\'activation de la scène ' . $scene_id);
+      return false;
+    }
+    
+    log::add('reolink', 'info', 'Scène activée : ' . $result['active_scene_name'] . ' (ID: ' . $result['active_scene_id'] . ')');
+    return true;
+  }
+
+  /**
+   * Active la détection de mouvement via Baichuan pour une caméra
+   */
+  public static function enableMotionDetection($id) {
+    $camera = reolink::byId($id, 'reolink');
+    if (!is_object($camera)) {
+      log::add('reolink', 'error', 'Caméra non trouvée : ID=' . $id);
+      return false;
+    }
+    
+    log::add('reolink', 'debug', 'Activation de la détection de mouvement pour la caméra : ' . $camera->getName());
+    
+    // Préparer les credentials pour l'appel API
+    $credentials = array(
+      'host' => $camera->getConfiguration('adresseip'),
+      'username' => $camera->getConfiguration('login'),
+      'password' => $camera->getConfiguration('password'),
+      'port' => intval($camera->getConfiguration('port', 9000)),
+      'channel' => intval($camera->getConfiguration('defined_channel', 0))
+    );
+    
+    // Appeler l'API pour activer la détection de mouvement
+    $result = reolink::callReolinkAioAPI('/reolink/camera/motion/enable', $credentials, 60);
+    
+    if (!$result || !isset($result['success']) || !$result['success']) {
+      $errorMsg = isset($result['detail']) ? $result['detail'] : 'Erreur inconnue';
+      log::add('reolink', 'error', 'Échec de l\'activation de la détection de mouvement : ' . $errorMsg);
+      throw new Exception(__('Échec de l\'activation de la détection de mouvement', __FILE__));
+    }
+    
+    log::add('reolink', 'info', 'Détection de mouvement activée pour ' . $result['camera']);
+    
+    // Mettre à jour l'état en interrogeant l'API
+    reolink::updateMotionDetectionState($id);
+    
+    return true;
+  }
+
+  /**
+   * Désactive la détection de mouvement via Baichuan pour une caméra
+   */
+  public static function disableMotionDetection($id) {
+    $camera = reolink::byId($id, 'reolink');
+    if (!is_object($camera)) {
+      log::add('reolink', 'error', 'Caméra non trouvée : ID=' . $id);
+      return false;
+    }
+    
+    log::add('reolink', 'debug', 'Désactivation de la détection de mouvement pour la caméra : ' . $camera->getName());
+    
+    // Préparer les credentials pour l'appel API
+    $credentials = array(
+      'host' => $camera->getConfiguration('adresseip'),
+      'username' => $camera->getConfiguration('login'),
+      'password' => $camera->getConfiguration('password'),
+      'port' => intval($camera->getConfiguration('port', 9000)),
+      'channel' => intval($camera->getConfiguration('defined_channel', 0))
+    );
+    
+    // Appeler l'API pour désactiver la détection de mouvement
+    $result = reolink::callReolinkAioAPI('/reolink/camera/motion/disable', $credentials, 60);
+    
+    if (!$result || !isset($result['success']) || !$result['success']) {
+      $errorMsg = isset($result['detail']) ? $result['detail'] : 'Erreur inconnue';
+      log::add('reolink', 'error', 'Échec de la désactivation de la détection de mouvement : ' . $errorMsg);
+      throw new Exception(__('Échec de la désactivation de la détection de mouvement', __FILE__));
+    }
+    
+    log::add('reolink', 'info', 'Détection de mouvement désactivée pour ' . $result['camera']);
+    
+    // Mettre à jour l'état en interrogeant l'API
+    reolink::updateMotionDetectionState($id);
+    
+    return true;
+  }
+
+  /**
+   * Met à jour l'état de la détection de mouvement en interrogeant l'API
+   */
+  public static function updateMotionDetectionState($id) {
+    $camera = reolink::byId($id, 'reolink');
+    if (!is_object($camera)) {
+      log::add('reolink', 'error', 'Caméra non trouvée : ID=' . $id);
+      return false;
+    }
+    
+    // Préparer les credentials pour l'appel API
+    $credentials = array(
+      'host' => $camera->getConfiguration('adresseip'),
+      'username' => $camera->getConfiguration('login'),
+      'password' => $camera->getConfiguration('password'),
+      'port' => intval($camera->getConfiguration('port', 9000)),
+      'channel' => intval($camera->getConfiguration('defined_channel', 0))
+    );
+    
+    // Appeler l'API pour récupérer le statut
+    $result = reolink::callReolinkAioAPI('/reolink/camera/motion/status', $credentials, 10);
+    
+    if ($result && isset($result['enabled'])) {
+      $enabled = $result['enabled'] ? 1 : 0;
+      $camera->checkAndUpdateCmd('motionDetectionState', $enabled);
+      log::add('reolink', 'debug', 'État de détection de mouvement mis à jour: ' . $enabled);
+      return true;
+    } else {
+      log::add('reolink', 'warning', 'Impossible de récupérer l\'état de la détection de mouvement');
+      return false;
+    }
+  }
+
+  /**
+   * Appelle l'API HomeHub pour découvrir et créer les caméras
+   */
+  public static function discoverAndCreateCamerasFromAPI($homeHubId) {
+    $homeHub = reolink::byId($homeHubId, 'reolink');
+    if (!is_object($homeHub)) {
+      log::add('reolink', 'error', 'HomeHub non trouvé : ID=' . $homeHubId);
+      return false;
+    }
+
+    log::add('reolink', 'info', 'Découverte des caméras du HomeHub via API...');
+
+    // Préparer les données de connexion
+    $credentials = reolink::getDeviceCredentials($homeHubId);
+
+    // Appeler l'API HomeHub
+    $hubInfo = reolink::callReolinkAioAPI('/reolink/discover', $credentials);
+    
+    if (!$hubInfo || !isset($hubInfo['cameras'])) {
+      log::add('reolink', 'error', 'Réponse API invalide pour /reolink/discover');
+      return false;
+    }
+
+    log::add('reolink', 'info', 'HomeHub découvert : ' . $hubInfo['model'] . ' avec ' . count($hubInfo['cameras']) . ' caméras');
+
+    // Créer un équipement pour chaque caméra
+    foreach ($hubInfo['cameras'] as $cameraData) {
+      if (!$cameraData['online']) {
+        log::add('reolink', 'info', 'Caméra hors ligne ignorée : ' . $cameraData['name']);
+        continue;
+      }
+
+      reolink::createCameraEquipmentFromHub($homeHubId, $cameraData);
+    }
+
+    return true;
+  }
+
+  /**
+   * Crée un équipement caméra depuis les données de l'API HomeHub
+   */
+  private static function createCameraEquipmentFromHub($homeHubId, $cameraData) {
+    $homeHub = reolink::byId($homeHubId, 'reolink');
+    $channelId = $cameraData['channel_id'];
+    
+    // Vérifier si l'équipement existe déjà
+    $logicalId = 'homehub_' . $homeHubId . '_ch' . $channelId;
+    $existingCameras = eqLogic::byLogicalId($logicalId, 'reolink');
+    if (is_object($existingCameras)) {
+      log::add('reolink', 'info', 'Équipement déjà existant pour ' . $cameraData['name'] . ' (canal ' . $channelId . ')');
+      return;
+    }
+
+    // Vérifier aussi par parent_hub_id et channel
+    $allCameras = eqLogic::byType('reolink');
+    foreach ($allCameras as $cam) {
+      if ($cam->getConfiguration('parent_hub_id') == $homeHubId && 
+          $cam->getConfiguration('defined_channel') == $channelId) {
+        log::add('reolink', 'info', 'Équipement déjà existant pour ' . $cameraData['name'] . ' (ID: ' . $cam->getId() . ')');
+        return;
+      }
+    }
+
+    log::add('reolink', 'info', 'Création de l\'équipement pour la caméra : ' . $cameraData['name'] . ' (canal ' . $channelId . ')');
+
+    // Créer le nouvel équipement
+    $camera = new reolink();
+    $camera->setName($cameraData['name']);
+    $camera->setLogicalId($logicalId);
+    $camera->setEqType_name('reolink');
+    $camera->setIsEnable(1);
+    $camera->setIsVisible(1);
+    
+    // Copier les informations de connexion du HomeHub
+    $camera->setConfiguration('adresseip', $homeHub->getConfiguration('adresseip'));
+    $camera->setConfiguration('port', $homeHub->getConfiguration('port'));
+    $camera->setConfiguration('login', $homeHub->getConfiguration('login'));
+    $camera->setConfiguration('password', $homeHub->getConfiguration('password'));
+    $camera->setConfiguration('cnxtype', $homeHub->getConfiguration('cnxtype'));
+    $camera->setConfiguration('port_onvif', $homeHub->getConfiguration('port_onvif', '8000'));
+    
+    // Informations spécifiques à la caméra
+    $camera->setConfiguration('defined_channel', $channelId);
+    $camera->setConfiguration('parent_hub_id', $homeHubId);
+    $camera->setConfiguration('parent_hub_name', $homeHub->getName());
+    $camera->setConfiguration('model', $cameraData['model']);
+    $camera->setConfiguration('isNVR', 'Non');
+    
+    if (isset($cameraData['uid']) && !empty($cameraData['uid'])) {
+      $camera->setConfiguration('uid', $cameraData['uid']);
+    }
+    if (isset($cameraData['serial']) && !empty($cameraData['serial'])) {
+      $camera->setConfiguration('serial', $cameraData['serial']);
+    }
+    
+    // Sauvegarder
+    $camera->save();
+    
+    log::add('reolink', 'info', 'Équipement créé avec succès (ID: ' . $camera->getId() . ')');
+    log::add('reolink', 'info', 'Cliquez sur "Récupérer les informations" pour obtenir toutes les données de la caméra');
+    
+    return $camera->getId();
+  }
+
   public static function refreshNFO($id) {
     $camcmd = reolink::byId($id, 'reolink');
-    $camcnx = reolink::getReolinkConnection($id);
-    $cmdget = NULL;
-
-    if ($camcnx->is_loggedin == false) {
-      exit();
-    }
-
-    log::add('reolink', 'debug', 'Rafraichissement des informations de la caméra...');
-
-    $channel = $camcmd->getConfiguration('defined_channel', 0);
-
-    // Prepare request with INFO needed
-    $cmdarr = [];
-    foreach (reolinkCmd::byEqLogicId($id) as $cmd) {
-      $payload = $cmd->getConfiguration('payload');
-      if ($cmd->getType() == "info" && $payload != NULL) {
-        $payload = str_replace('#CHANNEL#', $channel, $payload);
-        $payload = str_replace('\\', '', $payload);
-
-        if (!in_array($payload, $cmdarr)) {
-          $cmdarr[] = $payload;
+    
+    // Vérifier si c'est un HomeHub/NVR ou une caméra sous HomeHub
+    $parentHubId = $camcmd->getConfiguration('parent_hub_id');
+    $isHomeHub = $camcmd->getConfiguration('is_homehub', false);
+    
+    // Si HomeHub/NVR, récupérer les données via l'API Reolink AIO
+    if (!empty($parentHubId) || $isHomeHub) {
+      log::add('reolink', 'debug', 'Rafraichissement via API Reolink AIO...');
+      
+      if ($isHomeHub) {
+        // C'est un HomeHub/NVR - pas encore implémenté
+        log::add('reolink', 'info', 'Rafraichissement HomeHub/NVR - non implémenté pour le moment');
+        return true;
+      }
+      
+      // C'est une caméra sous HomeHub
+      $config = reolink::prepareHomeHubCredentials($id);
+      if (!$config) {
+        log::add('reolink', 'error', 'Impossible de préparer les credentials pour la caméra');
+        return false;
+      }
+      
+      // Récupérer les commandes via l'API
+      $endpoint = '/reolink/camera/' . $config['channel_id'] . '/refresh_info';
+      $cmd_results = reolink::callReolinkAioAPI($endpoint, $config['credentials'], 'POST');
+      
+      if (!$cmd_results || !is_array($cmd_results)) {
+        log::add('reolink', 'error', 'Impossible de récupérer les informations de configuration de la caméra');
+        return false;
+      }
+      
+      // Mapper les noms de commandes string en constantes reolinkAPI
+      foreach ($cmd_results as &$json_data) {
+        if (isset($json_data['cmd']) && is_string($json_data['cmd'])) {
+          $const_name = 'reolinkAPI::CAM_' . strtoupper(preg_replace('/([a-z])([A-Z])/', '$1_$2', $json_data['cmd']));
+          if (defined($const_name)) {
+            $json_data['cmd'] = constant($const_name);
+          }
         }
-        $cmd_block = array_chunk($cmdarr, config::byKey('cmdblock', __CLASS__, CMD_SEND_QTY));
+      }
+      unset($json_data);
+      
+      // Créer un tableau de résultats au format attendu par le reste du code
+      $cmd_block = [$cmd_results];
+      
+    } else {
+      // Méthode classique pour les caméras autonomes
+      $camcnx = reolink::getReolinkConnection($id);
+      $cmdget = NULL;
+
+      if ($camcnx->is_loggedin == false) {
+        exit();
+      }
+
+      log::add('reolink', 'debug', 'Rafraichissement des informations de la caméra...');
+
+      $channel = $camcmd->getConfiguration('defined_channel', 0);
+
+      // Prepare request with INFO needed
+      $cmdarr = [];
+      foreach (reolinkCmd::byEqLogicId($id) as $cmd) {
+        $payload = $cmd->getConfiguration('payload');
+        if ($cmd->getType() == "info" && $payload != NULL) {
+          $payload = str_replace('#CHANNEL#', $channel, $payload);
+          $payload = str_replace('\\', '', $payload);
+
+          if (!in_array($payload, $cmdarr)) {
+            $cmdarr[] = $payload;
+          }
+          $cmd_block = array_chunk($cmdarr, config::byKey('cmdblock', __CLASS__, CMD_SEND_QTY));
+        }
       }
     }
 
+    // Traitement des commandes (commun à toutes les sources)
     foreach ($cmd_block as $key => &$value) {
-      $cmdget = "";
-      foreach ($value as &$value2) {
-        $cmdget .= $value2 . ",";
+      // Si provient de l'API AIO, $value est déjà le tableau de résultats
+      // Sinon, il faut envoyer la commande via reolinkAPI
+      if (!empty($parentHubId) || $isHomeHub) {
+        $res = $value; // Déjà les résultats de l'API
+      } else {
+        $cmdget = "";
+        foreach ($value as &$value2) {
+          $cmdget .= $value2 . ",";
+        }
+        $cmdget = substr($cmdget, 0, -1);
+        log::add('reolink', 'debug', 'Envoi ' . ($key + 1) . '/' . count($cmd_block) . ' payload multiple GetSetting = ' . $cmdget);
+        $res = $camcnx->SendCMD("[$cmdget]");
       }
-      $cmdget = substr($cmdget, 0, -1);
-      log::add('reolink', 'debug', 'Envoi ' . ($key + 1) . '/' . count($cmd_block) . ' payload multiple GetSetting = ' . $cmdget);
-      $res = $camcnx->SendCMD("[$cmdget]");
 
       foreach ($res as &$json_data) {
         log::add('reolink', 'debug', 'Lecture info > ' . preg_replace('/\s+/', '', print_r($json_data, true)));
@@ -491,6 +1171,12 @@ class reolink extends eqLogic {
         }
       }
     } #END foreach
+    
+    // Mise à jour de l'état de la détection de mouvement (mode Baichuan)
+    $detection_mode = config::byKey('detection_mode', __CLASS__, 'onvif');
+    if ($detection_mode == 'baichuan') {
+      reolink::updateMotionDetectionState($id);
+    }
   } #End refreshNFO
 
 
@@ -530,30 +1216,34 @@ class reolink extends eqLogic {
   // Fonction exécutée automatiquement toutes les 10 minutes par Jeedom
   public static function cron10() {
     // Refresh motion detection subscription
-    $eqLogics = eqLogic::byType('reolink', true);
-    foreach ($eqLogics as $camera) {
+    $detection_mode = config::byKey('detection_mode', __CLASS__, 'onvif');
+    
+    if ($detection_mode == 'onvif') {
+      $eqLogics = eqLogic::byType('reolink', true);
+      // Mode ONVIF: Envoie les infos pour chaque caméra
+      foreach ($eqLogics as $camera) {
+        $camera_contact_point = $camera->getConfiguration('adresseip');
+        if (filter_var($camera_contact_point, FILTER_VALIDATE_IP)) {
+          $camera_ip = $camera_contact_point;
+        } else {
+          $camera_ip = gethostbyname($camera_contact_point);
+        }
 
-      $camera_contact_point = $camera->getConfiguration('adresseip');
-      if (filter_var($camera_contact_point, FILTER_VALIDATE_IP)) {
-        $camera_ip = $camera_contact_point;
-      } else {
-        $camera_ip = gethostbyname($camera_contact_point);
+        $port_onvif = $camera->getConfiguration('port_onvif');
+        if ($port_onvif == "") {
+          $port_onvif = "8000";
+        }
+        
+        // Sending info to Daemon
+        $params['action'] = 'sethook';
+        $params['cam_ip'] = $camera_ip;
+        $params['cam_onvif_port'] = $port_onvif;
+        $params['cam_user'] = $camera->getConfiguration('login');
+        $params['cam_pwd'] = $camera->getConfiguration('password');
+
+        log::add('reolink', 'debug', 'CRON mise à jour souscription ONVIF events Cam=' . $camera->getConfiguration('adresseip'));
+        reolink::sendToDaemon($params);
       }
-
-
-      $port_onvif = $camera->getConfiguration('port_onvif');
-      if ($port_onvif == "") {
-        $port_onvif = "8000";
-      }
-      // Sending info to Daemon
-      $params['action'] = 'sethook';
-      $params['cam_ip'] = $camera_ip;
-      $params['cam_onvif_port'] = $port_onvif;
-      $params['cam_user'] = $camera->getConfiguration('login');
-      $params['cam_pwd'] = $camera->getConfiguration('password');
-
-      log::add('reolink', 'debug', 'CRON mise à jour souscription ONVIF events Cam=' . $camera->getConfiguration('adresseip'));
-      reolink::sendToDaemon($params);
     }
   }
 
@@ -611,6 +1301,8 @@ class reolink extends eqLogic {
       $cmd .= ' --webhook_ip ' . $webhook_ip;
     }
     $cmd .= ' --webhook_port ' . config::byKey('webhookport', __CLASS__, '44010');
+    $cmd .= ' --reolink_aio_api_port ' . config::byKey('reolink_aio_api_port', __CLASS__, '44011');
+    $cmd .= ' --detection_mode ' . config::byKey('detection_mode', __CLASS__, 'onvif');
     log::add(__CLASS__, 'info', 'Lancement démon');
     $result = exec($cmd . ' >> ' . log::getPathToLog('reolink_daemon') . ' 2>&1 &');
     $i = 0;
@@ -687,7 +1379,6 @@ class reolink extends eqLogic {
     }
     // Champs OK
   }
-
 
   public function loadCmdFromConf($id) {
     $devAbilityReturn = reolink::GetCamAbility($id);
@@ -849,7 +1540,8 @@ class reolinkCmd extends cmd {
     log::add('reolink', 'debug', 'Action demandé : ' . $this->getLogicalId());
     $EqId = $this->getEqLogic_id();
 
-    $channel = $this->getConfiguration('defined_channel');
+    $channel = $this->getEqLogic()->getConfiguration('defined_channel'); // Cherche dans l'équipement parent
+    log::add('reolink', 'debug', 'Channel : ' . $channel);
     if ($channel == NULL) {
       $channel = 0;
     }
@@ -863,8 +1555,20 @@ class reolinkCmd extends cmd {
         $data = $camcnx->SendCMD('[{"cmd":"GetPtzPreset","action":1,"param":{"channel":' . $channel . '}}]');
         reolink::updatePTZpreset($EqId, $data[0]);
         break;
+      case 'GetScenes':
+        reolink::updateScenes($EqId);
+        break;
+      case 'SetScene':
+        reolink::setScene($EqId, $_options['select']);
+        break;
       case 'SetSpeed':
         $this->setConfiguration('speedvalue', $_options['slider']);
+        break;
+      case 'enableMotionDetection':
+        reolink::enableMotionDetection($EqId);
+        break;
+      case 'disableMotionDetection':
+        reolink::disableMotionDetection($EqId);
         break;
       default:
         $camcnx = reolink::getReolinkConnection($EqId);

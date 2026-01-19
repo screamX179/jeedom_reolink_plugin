@@ -18,15 +18,11 @@ except:
 	logging.error(f"Unable to read credentials jeedom file, retry...")
 	sys.exit(1)
 
-try:
-	os.remove("jeedomcreds")
-except:
-	pass
-
 jeedom_cnx = jeedom_com(_apikey, _callback)
 detect_state = 0
 # BEGIN  added by t0urista to handle ONVIF events
-eventTable = {}  
+eventTable = {}
+cameraIPs = {}  # Track IPs that have sent events with timestamp
 # END  added by t0urista to handle ONVIF events
 app = FastAPI()
 
@@ -38,11 +34,17 @@ async def get_body(request: Request):
 
 # BEGIN  added by t0urista to handle ONVIF events
 	global eventTable
+	global cameraIPs
 # END  added by t0urista to handle ONVIF events
 
     
 	ip = request.client.host
 	logging.debug(f"Incoming XML camera event on webhook from IP={ip}")
+	
+	# Track this camera IP with current timestamp
+	import time
+	cameraIPs[ip] = time.time()
+	
 	xml_answer = await request.body()
 
 	new_detect_state = 0
@@ -104,3 +106,27 @@ async def get_body(request: Request):
 # END  added by t0urista to handle ONVIF events
 
 	return
+
+
+@app.get("/health")
+async def health_check():
+	"""
+	Vérification de santé du webhook ONVIF
+	"""
+	import time
+	# Nettoyer les IPs inactives (plus de 15 minutes sans événement)
+	current_time = time.time()
+	active_cameras = []
+	for ip, last_seen in list(cameraIPs.items()):
+		if current_time - last_seen > 900:  # 15 minutes
+			del cameraIPs[ip]
+		else:
+			active_cameras.append(ip)
+	
+	return {
+		"status": "healthy",
+		"mode": "onvif",
+		"registered_events": len(eventTable),
+		"event_types": list(eventTable.keys()),
+		"active_cameras": active_cameras
+	}

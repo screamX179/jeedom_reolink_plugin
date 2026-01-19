@@ -96,6 +96,38 @@
 			"logicalId": "EvVisitor"
 		},       
       
+        {
+			"abilityneed":"alarmMd",
+			"name": "Détection mouvement (état)",
+			"type": "info",
+			"subtype": "binary",
+			"IsHistorized": 0,
+			"isVisible": 1,
+			"logicalId": "motionDetectionState"
+		},
+        {
+			"abilityneed":"alarmMd",
+			"name": "Activer détection mouvement",
+			"type": "action",
+			"subtype": "other",
+			"configuration": {
+				"valueFrom": "motionDetectionState"
+			},
+			"isVisible": 1,
+			"logicalId": "enableMotionDetection"
+		},
+		{
+			"abilityneed":"alarmMd",
+			"name": "Désactiver détection mouvement",
+			"type": "action",
+			"subtype": "other",
+			"configuration": {
+				"valueFrom": "motionDetectionState"
+			},
+			"isVisible": 1,
+			"logicalId": "disableMotionDetection"
+		},
+
          {
 			"abilityneed":"alarmMd",
 			"name": "last Onvif Event (full) ",
@@ -2076,6 +2108,32 @@
 			"IsHistorized": 0,
 			"isVisible": 1,
 			"logicalId": "SetIntervalAutoReturnPtzGuardPoint"
+		},
+		{
+			"abilityneed":"scene",
+			"name": "Récupérer les scènes",
+			"type": "action",
+			"subtype": "other",
+			"configuration": {
+				"actionapi": "GetScenes"
+			},
+			"IsHistorized": 0,
+			"isVisible": 1,
+			"logicalId": "GetScenes"
+		},
+		{
+			"abilityneed":"scene",
+			"name": "Activer une scène",
+			"type": "action",
+			"subtype": "select",
+			"configuration": {
+				"option": "select",
+				"listValue": "-1|Désactiver les scènes",
+				"actionapi": "SetScene"
+			},
+			"IsHistorized": 0,
+			"isVisible": 1,
+			"logicalId": "SetScene"
 		}
 	]
 }

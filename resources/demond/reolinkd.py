@@ -47,38 +47,42 @@ def read_socket():
             # Receive message for handle
 
             if message['action'] == "sethook":
-                _cam_ip = message['cam_ip']
-                _cam_onvif_port = message['cam_onvif_port']
-                _cam_user = message['cam_user']
-                _cam_pwd = message['cam_pwd']
-                logging.debug(f"Requested to set the webhook inside CAM IP={_cam_ip}")
+                # ONVIF mode: setup webhook subscription
+                if _detection_mode == 'onvif':
+                    _cam_ip = message['cam_ip']
+                    _cam_onvif_port = message['cam_onvif_port']
+                    _cam_user = message['cam_user']
+                    _cam_pwd = message['cam_pwd']
+                    logging.debug(f"Requested to set the webhook inside CAM IP={_cam_ip} (ONVIF mode)")
 
-                result_resp = {
-                    "message": "subscription",
-                    "ip": _cam_ip
-                }
+                    result_resp = {
+                        "message": "subscription",
+                        "ip": _cam_ip
+                    }
 
-                if chk_ping(_cam_ip) is False:
-                    logging.error(f"CAM IP={_cam_ip} is not reachable. (Please check that the camera is switched ON and correctly connected to the network)")
-                    result_resp['state'] = 0
-                    result_resp['details'] = "Camera is not reachable"
-                else:
-                    if check_onvif(_cam_ip, int(_cam_onvif_port)) is False:
-                        logging.error(f"CAM IP={_cam_ip} is not ONVIF capable. (Please check the camera settings if the ONVIF protocol is enabled correctly)")
+                    if chk_ping(_cam_ip) is False:
+                        logging.error(f"CAM IP={_cam_ip} is not reachable. (Please check that the camera is switched ON and correctly connected to the network)")
                         result_resp['state'] = 0
-                        result_resp['details'] = "Camera is not ONVIF capable"
+                        result_resp['details'] = "Camera is not reachable"
                     else:
-                        if asyncio.run(subscribe_onvif(_cam_ip, _cam_onvif_port, _cam_user, _cam_pwd)):
-                            logging.debug("Subscribe OK")
-                            result_resp['state'] = 1
-                        else:
-                            logging.info("Unable to subscribe ONVIF event")
+                        if check_onvif(_cam_ip, int(_cam_onvif_port)) is False:
+                            logging.error(f"CAM IP={_cam_ip} is not ONVIF capable. (Please check the camera settings if the ONVIF protocol is enabled correctly)")
                             result_resp['state'] = 0
-                            result_resp['details'] = "Unable to subscribe ONVIF event"
-                # ============================================
-                # Send result to jeedom
-                message = json.dumps(result_resp)
-                jeedom_cnx.send_change_immediate(json.loads(message))
+                            result_resp['details'] = "Camera is not ONVIF capable"
+                        else:
+                            if asyncio.run(subscribe_onvif(_cam_ip, _cam_onvif_port, _cam_user, _cam_pwd)):
+                                logging.debug("Subscribe OK")
+                                result_resp['state'] = 1
+                            else:
+                                logging.info("Unable to subscribe ONVIF event")
+                                result_resp['state'] = 0
+                                result_resp['details'] = "Unable to subscribe ONVIF event"
+                    # ============================================
+                    # Send result to jeedom
+                    message = json.dumps(result_resp)
+                    jeedom_cnx.send_change_immediate(json.loads(message))
+                else:
+                    logging.warning(f"sethook action not supported in {_detection_mode} mode")
             else:
                 logging.debug("Message received is not supported")
         except Exception as e:
@@ -119,8 +123,13 @@ def get_logger_text():
 
 
 def run_uvicorn():
-    logging.info('Starting webhook...')
+    logging.info('Starting webhook (ONVIF mode)...')
     uvicorn.run(app="camhook:app", host="0.0.0.0", port=_webhook_port, log_level=get_logger_text())
+
+
+def run_reolink_aio_api():
+    logging.info('Starting Reolink API (reolink-aio)...')
+    uvicorn.run(app="reolink_aio_api:app", host="127.0.0.1", port=_reolink_aio_api_port, log_level=get_logger_text())
 
 
 def start_uvicorn():
@@ -129,10 +138,22 @@ def start_uvicorn():
     proc.start()
 
 
+def start_reolink_aio_api():
+    global proc_reolink_aio
+    proc_reolink_aio = Process(target=run_reolink_aio_api, args=(), daemon=True)
+    proc_reolink_aio.start()
+
+
 def stop_uvicorn():
     global proc
     if proc:
         proc.join(0.25)
+
+
+def stop_reolink_aio_api():
+    global proc_reolink_aio
+    if proc_reolink_aio:
+        proc_reolink_aio.join(0.25)
 
 # ----------------------------------------------------------------------------
 
@@ -144,6 +165,10 @@ def handler(signum=None, frame=None):
 
 def shutdown():
     logging.debug("Shutdown")
+    logging.debug("Stopping Reolink_aio API...")
+    stop_reolink_aio_api()
+    logging.debug("Stopping webhook...")
+    stop_uvicorn()
     logging.debug("Removing PID file " + str(_pidfile))
     try:
         os.remove(_pidfile)
@@ -196,6 +221,8 @@ _apikey = ''
 _callback = ''
 _webhook_ip = local_ip
 _webhook_port = '44010'
+_reolink_aio_api_port = 44011
+_detection_mode = 'onvif'  # Default: onvif or baichuan
 _cycle = 0.3
 
 parser = argparse.ArgumentParser(
@@ -209,6 +236,8 @@ parser.add_argument("--pid", help="Pid file", type=str)
 parser.add_argument("--socketport", help="Port for server", type=str)
 parser.add_argument("--webhook_ip", help="IP for webhook", type=str)
 parser.add_argument("--webhook_port", help="Port for webhook", type=str)
+parser.add_argument("--reolink_aio_api_port", help="Port for Reolink AIO API", type=str)
+parser.add_argument("--detection_mode", help="Motion detection mode: onvif or baichuan", type=str)
 args = parser.parse_args()
 
 if args.device:
@@ -229,6 +258,13 @@ if args.webhook_ip:
     _webhook_ip = str(args.webhook_ip)
 if args.webhook_port:
     _webhook_port = int(args.webhook_port)
+if args.reolink_aio_api_port:
+    _reolink_aio_api_port = int(args.reolink_aio_api_port)
+if args.detection_mode:
+    _detection_mode = str(args.detection_mode).lower()
+    if _detection_mode not in ['onvif', 'baichuan']:
+        logging.warning('Invalid detection mode: %s, using default: onvif', _detection_mode)
+        _detection_mode = 'onvif'
 
 _socket_port = int(_socket_port)
 
@@ -244,9 +280,11 @@ logging.info('Apikey : %s', _apikey)
 logging.info('Device : %s', _device)
 logging.info('Webhook IP : %s', _webhook_ip)
 logging.info('Webhook port : %s', _webhook_port)
+logging.info('Reolink AIO API port : %s', _reolink_aio_api_port)
+logging.info('Detection mode : %s', _detection_mode)
 
 try:
-    logging.info('Write creds file for camhook')
+    logging.info('Write creds file for camhook and reolink_aio_api')
     lines = [_callback, _apikey]
     with open('jeedomcreds', 'w') as f:
         for line in lines:
@@ -255,7 +293,11 @@ try:
 except Exception as e:
     logging.debug('Unable to write creds file: %s', e)
 
-start_uvicorn()
+# Start services based on detection mode
+if _detection_mode == 'onvif':
+    start_uvicorn()  # Webhook for ONVIF events
+    
+start_reolink_aio_api()  # Always start the Reolink API
 
 signal.signal(signal.SIGINT, handler)
 signal.signal(signal.SIGTERM, handler)

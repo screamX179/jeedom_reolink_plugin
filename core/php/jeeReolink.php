@@ -55,7 +55,12 @@ try {
 # END  added by t0urista to handle ONVIF events
 
               #log::add('reolink', 'debug', 'IP : ' . $camera_contact_point . ' / IsCamAI : ' . $camera_AI . ' / EqId : ' . $EqId . ' / Channel : ' . $channel);
-              if ($camera_AI == "Oui") {
+              
+              // En mode Baichuan, les événements AI sont déjà envoyés par le callback Python
+              // En mode ONVIF, il faut interroger l'API pour récupérer les états AI
+              $detection_mode = config::byKey('detection_mode', 'reolink', 'onvif');
+              
+              if ($camera_AI == "Oui" && $detection_mode == 'onvif') {
                   $camcnx = reolink::getReolinkConnection($eqLogic->getId());
                   $channel = $eqLogic->getConfiguration('channelNum') - 1;
                   $res = $camcnx->SendCMD('[{"cmd":"GetAiState","action":0,"param":{"channel":'.$channel.'}}]');
@@ -64,7 +69,7 @@ try {
                     $eqLogic->checkAndUpdateCmd('EvVehicleDetect', $res[0]['value']['vehicle']['alarm_state']);
                     $eqLogic->checkAndUpdateCmd('EvDogCatDetect', $res[0]['value']['dog_cat']['alarm_state']);
                   }
-                  log::add('reolink', 'debug', 'Cam AI : Evènements Motion | Personne : ' . $res[0]['value']['people']['alarm_state'] . ' / Vehicule : ' . $res[0]['value']['vehicle']['alarm_state'] . ' / Chien/Chat : ' . $res[0]['value']['dog_cat']['alarm_state']);
+                  log::add('reolink', 'debug', 'Cam AI (ONVIF mode) : Evènements Motion | Personne : ' . $res[0]['value']['people']['alarm_state'] . ' / Vehicule : ' . $res[0]['value']['vehicle']['alarm_state'] . ' / Chien/Chat : ' . $res[0]['value']['dog_cat']['alarm_state']);
               }
             }
           }

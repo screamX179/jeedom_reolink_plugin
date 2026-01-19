@@ -150,16 +150,14 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="port_onvif" placeholder="{{8000}}"/>
 								</div>
 							</div>
-							<!--- NOT USED
 							<div class="form-group">
 								<label class="col-sm-3 control-label">{{Channel}}
-									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le numéro de channel (uniquement si la caméra est utilisé via un NVR)}}"></i></sup>
+									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le numéro de channel (uniquement si la caméra est connectée via un NVR/HomeHub). Laisser vide ou 0 pour une caméra autonome.}}"></i></sup>
 								</label>
 								<div class="col-sm-7">
-									<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="defined_channel" placeholder="{{(facultatif)}}"/>
+									<input type="number" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="defined_channel" placeholder="{{0}}"/>
 								</div>
 							</div>
-							-->
 							<div class="form-group">
 								<label class="col-sm-3 control-label">{{Login}}
 									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le login de la caméras, celui utiliser pour accéder à l'interface web}}"></i></sup>
@@ -278,6 +276,18 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<span class="eqLogicAttr" data-l1key="configuration" data-l2key="supportai"></span>
 								</div>
 							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{HomeHub/NVR}}</label>
+								<div class="col-sm-7">
+									<span class="eqLogicAttr" data-l1key="configuration" data-l2key="isNVR"></span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{HomeHub Parent}}</label>
+								<div class="col-sm-7">
+									<span class="eqLogicAttr" data-l1key="configuration" data-l2key="parent_hub_name"></span>
+								</div>
+							</div>
 
 							<hr>
 							<div class="form-group">
@@ -320,6 +330,12 @@ $eqLogics = eqLogic::byType($plugin->getId());
 							<div class="container-fluid">
 									<div class="form-group">
 											<a class="btn btn-block btn-primary eqLogicAction" id="btGetCamNFO"><i class="fas fa-download"></i> {{Récupérer les informations}}</a>
+									</div>
+									<br>
+							</div>
+							<div class="container-fluid homeHubOnly" style="display:none;">
+									<div class="form-group">
+											<a class="btn btn-block btn-warning eqLogicAction" id="btSyncHomeHubCameras"><i class="fas fa-sync"></i> {{Synchroniser les caméras}}</a>
 									</div>
 									<br>
 							</div>
@@ -701,6 +717,44 @@ $('#btGetCamNFO').on('click', function () {
 			}
 		});
 });
+
+$('#btSyncHomeHubCameras').on('click', function () {
+		$.ajax({// fonction permettant de faire de l'ajax
+				type: "POST", // methode de transmission des données au fichier php
+				url: "plugins/reolink/core/ajax/reolink.ajax.php", // url du fichier php
+				data: {
+					action: "SyncHomeHubCameras",
+					id : $('.eqLogicAttr[data-l1key=id]').value()
+				},
+				dataType: 'json',
+				error: function (request, status, error) {
+					handleAjaxError(request, status, error);
+				},
+				success: function (data) { // si l'appel a bien fonctionné
+				if (data.state != 'ok') {
+					$('#div_alert').showAlert({message: data.result, level: 'danger'});
+					return;
+				}
+				$('#div_alert').showAlert({message: '{{Caméras synchronisées avec succès}}', level: 'success'});
+				window.location.reload();
+			}
+		});
+});
+
+// Afficher/masquer le bouton de synchronisation selon le type d'équipement
+$('.eqLogicAttr[data-l1key=configuration][data-l2key=isNVR]').on('change', function() {
+	if ($(this).value() === 'Oui') {
+		$('.homeHubOnly').show();
+	} else {
+		$('.homeHubOnly').hide();
+	}
+});
+
+// Initialiser l'affichage au chargement
+if ($('.eqLogicAttr[data-l1key=configuration][data-l2key=isNVR]').value() === 'Oui') {
+	$('.homeHubOnly').show();
+}
+
 /* Actions des boutons sur la page */
 function SetCAMconfig(REQgroup){
 	$.ajax({// fonction permettant de faire de l'ajax
