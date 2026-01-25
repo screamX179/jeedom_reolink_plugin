@@ -159,7 +159,7 @@ $daemonInfo = reolink::deamon_info();
               <tbody>
                 <?php foreach ($healthInfo['active_baichuan_cameras'] as $camera): ?>
                   <tr>
-                    <td><code><?php echo $camera['session_key']; ?></code></td>
+                    <td><span class="label label-info"><?php echo $camera['session_key']; ?></span></td>
                     <td>
                       <?php 
                       foreach ($camera['channels'] as $channel) {
@@ -183,14 +183,21 @@ $daemonInfo = reolink::deamon_info();
 
     <!-- Liste des équipements -->
     <?php 
-    // Préparer une map des caméras avec détection Baichuan active
-    $activeBaichuanMap = [];
+    // Préparer une map des channels actifs pour Baichuan (IP:channel)
+    $activeBaichuanChannels = [];
     if ($detectionMode == 'baichuan' && isset($healthInfo['active_baichuan_cameras'])) {
       foreach ($healthInfo['active_baichuan_cameras'] as $camera) {
         // Extraire l'IP depuis session_key (format: "ip:port")
         $parts = explode(':', $camera['session_key']);
         if (count($parts) >= 1) {
-          $activeBaichuanMap[$parts[0]] = true;
+          $camera_ip = $parts[0];
+          
+          // Ajouter chaque channel actif
+          if (isset($camera['channels']) && is_array($camera['channels'])) {
+            foreach ($camera['channels'] as $channel) {
+              $activeBaichuanChannels[$camera_ip . ':' . $channel] = true;
+            }
+          }
         }
       }
     }
@@ -216,6 +223,7 @@ $daemonInfo = reolink::deamon_info();
             <tr>
               <th>{{Nom}}</th>
               <th>{{IP}}</th>
+              <th>{{Channel}}</th>
               <th>{{Actif}}</th>
               <th>{{Visible}}</th>
               <?php if ($detectionMode == 'onvif'): ?>
@@ -226,14 +234,54 @@ $daemonInfo = reolink::deamon_info();
             </tr>
           </thead>
           <tbody>
-            <?php foreach (reolink::byType('reolink') as $eqLogic): ?>
+            <?php foreach (reolink::byType('reolink') as $eqLogic): 
+              // Récupérer l'adresse et la résoudre en IP
+              $camera_contact_point = $eqLogic->getConfiguration('adresseip');
+              $camera_ip = filter_var($camera_contact_point, FILTER_VALIDATE_IP) 
+                ? $camera_contact_point 
+                : gethostbyname($camera_contact_point);
+              
+              $channel_id = $eqLogic->getConfiguration('defined_channel', 0);
+              $parent_hub_id = $eqLogic->getConfiguration('parent_hub_id');
+              $is_active = false;
+              
+              // Déterminer l'IP à utiliser (hub parent ou caméra elle-même)
+              $target_ip = $camera_ip;
+              if (!empty($parent_hub_id)) {
+                $parent_hub = eqLogic::byId($parent_hub_id);
+                if ($parent_hub) {
+                  $hub_contact_point = $parent_hub->getConfiguration('adresseip');
+                  $target_ip = filter_var($hub_contact_point, FILTER_VALIDATE_IP) 
+                    ? $hub_contact_point 
+                    : gethostbyname($hub_contact_point);
+                }
+              }
+              
+              // Vérifier le statut
+              if ($detectionMode == 'baichuan') {
+                $channel_key = $target_ip . ':' . $channel_id;
+                $is_active = isset($activeBaichuanChannels[$channel_key]);
+              } else {
+                $is_active = isset($activeOnvifMap[$target_ip]);
+              }
+            ?>
               <tr>
                 <td>
                   <a href="index.php?v=d&p=reolink&m=reolink&id=<?php echo $eqLogic->getId(); ?>">
                     <?php echo $eqLogic->getHumanName(); ?>
                   </a>
                 </td>
-                <td><code><?php echo $eqLogic->getConfiguration('camerahostname'); ?></code></td>
+                <td><span class="label label-info"><?php echo $camera_contact_point; ?></span></td>
+                <td>
+                  <?php 
+                  $isNVR = $eqLogic->getConfiguration('isNVR');
+                  if ($isNVR === 'Oui'): 
+                  ?>
+                    <span class="label label-info">Hub</span>
+                  <?php else: ?>
+                    <span class="label label-info"><?php echo $channel_id; ?></span>
+                  <?php endif; ?>
+                </td>
                 <td>
                   <?php if ($eqLogic->getIsEnable()): ?>
                     <i class="fas fa-check text-success"></i>
@@ -250,10 +298,9 @@ $daemonInfo = reolink::deamon_info();
                 </td>
                 <?php if ($detectionMode == 'onvif'): ?>
                 <td>
-                  <?php 
-                  $camIp = $eqLogic->getConfiguration('camerahostname');
-                  if (isset($activeOnvifMap[$camIp])): 
-                  ?>
+                  <?php if ($isNVR === 'Oui'): ?>
+                    <span class="label label-default">N/A</span>
+                  <?php elseif ($is_active): ?>
                     <span class="label label-success"><i class="fas fa-check"></i> {{Connectée}}</span>
                   <?php else: ?>
                     <span class="label label-default"><i class="fas fa-times"></i> {{Inactive}}</span>
@@ -261,10 +308,9 @@ $daemonInfo = reolink::deamon_info();
                 </td>
                 <?php elseif ($detectionMode == 'baichuan'): ?>
                 <td>
-                  <?php 
-                  $camIp = $eqLogic->getConfiguration('camerahostname');
-                  if (isset($activeBaichuanMap[$camIp])): 
-                  ?>
+                  <?php if ($isNVR === 'Oui'): ?>
+                    <span class="label label-default">N/A</span>
+                  <?php elseif ($is_active): ?>
                     <span class="label label-success"><i class="fas fa-check"></i> {{Active}}</span>
                   <?php else: ?>
                     <span class="label label-default"><i class="fas fa-times"></i> {{Inactive}}</span>

@@ -181,8 +181,11 @@ async def enable_motion_detection(camera_name, cameras):
                 logging.debug(traceback.format_exc())
         
         # Register callback and subscribe to events
-        callback_id = f'{camera_name}_motion'
+        callback_id = f'{camera_name}_ch{channel}_motion'
         camera_api.baichuan.register_callback(callback_id, motion_callback, 33, channel)
+        
+        # Debug : vérifier que le callback est bien enregistré
+        logging.debug(f'After register_callback: _ext_callback={camera_api.baichuan._ext_callback}')
         
         # Subscribe if not already subscribed
         if not camera_api.baichuan._subscribed:
@@ -224,11 +227,16 @@ async def disable_motion_detection(camera_name, cameras):
             logging.error('Failed to connect to camera %s', camera_name)
             return False
         
+        channel = cam_config.get('channel', 0)
+        
         # Unregister callback
-        callback_id = f'{camera_name}_motion'
+        callback_id = f'{camera_name}_ch{channel}_motion'
         camera_api.baichuan.unregister_callback(callback_id)
         
-        logging.info('Motion detection disabled on camera %s', camera_name)
+        # Debug : vérifier que le callback est bien désenregistré
+        logging.debug(f'After unregister_callback: _ext_callback={camera_api.baichuan._ext_callback}')
+        
+        logging.info('Motion detection disabled on camera %s (channel %d)', camera_name, channel)
         return True
         
     except Exception as e:
@@ -317,7 +325,7 @@ def get_active_cameras():
                         'callback_count': sum(len(callbacks) for callbacks in camera_api.baichuan._ext_callback.get(33, {}).values())
                     })
         
-        logging.debug(f'Active Baichuan cameras: {len(active_cameras)}')
+        logging.debug(f'Active Baichuan cameras: {len(active_cameras)} - {active_cameras}')
         return active_cameras
         
     except Exception as e:
