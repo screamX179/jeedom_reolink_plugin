@@ -181,6 +181,37 @@ Reolink AIO API port : 44011
 Starting Reolink API (reolink-aio)...
 ```
 
+## Capacités disponibles
+
+### Comparaison des API
+
+Le plugin utilise désormais deux sources d'API :
+- **API HTTP native** : Pour les caméras autonomes (connexion directe)
+- **API Baichuan + HTTP** : Pour les caméras connectées à un HomeHub/NVR
+
+Pour une comparaison détaillée des capacités disponibles selon la méthode d'accès, consultez la documentation [COMPARISON_ABILITIES.md](COMPARISON_ABILITIES.md).
+
+**Résumé des capacités** :
+- **~100 capacités totales** exposées via l'API AIO
+- **~60 capacités Baichuan** : Événements temps réel, configuration caméra, IA avancée
+- **~25 capacités HTTP uniquement** : Firmware, streaming, webhooks, VOD
+- **~15 capacités combinées** : Fonctionnent via les deux méthodes
+
+### Nouvelles capacités ajoutées
+
+Par rapport à l'ancienne API native, l'API AIO expose désormais :
+- ✅ **Scènes** (HomeHub uniquement) - Gestion complète des scènes
+- ✅ **Détection IA avancée** - Cry detection, YOLO AI, Smart AI (crossline, intrusion, loitering)
+- ✅ **Pre-recording** - Configuration de l'enregistrement avant événement
+- ✅ **Doorbell/Chime** - Gestion complète des sonnettes et carillons
+- ✅ **Audio avancé** - Réduction de bruit, réponses rapides
+- ✅ **Règles de surveillance** - Configuration des règles IFTTT
+- ✅ **PIR Sensor** - Configuration capteur PIR
+- ✅ **IO Inputs/Outputs** - Gestion des entrées/sorties
+- ✅ **VOD** - Recherche et téléchargement vidéos
+- ✅ **Webhooks** - Gestion des webhooks HTTP
+- ✅ **ONVIF Subscription** - Souscription événements ONVIF
+
 ## Troubleshooting
 
 ### Le mode Baichuan ne fonctionne pas
