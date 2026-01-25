@@ -202,8 +202,8 @@ async def get_camera_full_info(channel_id: int, credentials: HomeHubCredentials)
                 "firmVer": host.camera_sw_version(channel_id),
                 "detail": host.camera_model(channel_id),
                 "type": "IPC",
-                "buildDay": "TBC",
-                "cfgVer": "TBC",
+                "buildDay": "Unknown",  # Non exposé par reolink_aio
+                "cfgVer": "Unknown",  # Non exposé par reolink_aio
             },
             "P2p": {
                 "uid": host.camera_uid(channel_id)
@@ -216,15 +216,15 @@ async def get_camera_full_info(channel_id: int, credentials: HomeHubCredentials)
                 "aiTrack": host.ai_supported(channel_id) if hasattr(host, 'ai_supported') else False
             },
             "NetPort": {
-                "httpPort": 0, #TBC
-                "httpsPort": host.port,
-                "mediaPort": 0, #TBC
+                "httpPort": 80 if host.use_https is None else (0 if host.use_https else host.port),
+                "httpsPort": 443 if host.use_https is None else (host.port if host.use_https else 0),
+                "mediaPort": 9000,  # Port Baichuan par défaut
                 "onvifPort": host.onvif_port,
                 "rtmpPort": host.rtmp_port,
                 "rtspPort": host.rtsp_port,
                 "httpEnable": 1 if not host.use_https else 0,
                 "httpsEnable": 1 if host.use_https else 0,
-                "mediaEnable": 0, #TBC
+                "mediaEnable": 1,  # Baichuan toujours activé pour caméras via HomeHub
                 "onvifEnable": 1 if host.onvif_enabled else 0,
                 "rtmpEnable": 1 if host.rtmp_enabled else 0,
                 "rtspEnable": 1 if host.rtsp_enabled else 0
@@ -339,95 +339,185 @@ def build_abilities(host: Host, channel: int | None) -> dict:
         return {"ver": ver if ver > 0 else 1, "permit": 1 if ver > 0 else 0}
     
     abilities = {
-        # Capacités de base (toujours présentes)
+        # === CAPACITÉS DE BASE ===
         "none": {"ver": 1, "permit": 1},
         
-        # Reboot
+        # === SYSTÈME ===
         "reboot": check_api_version("reboot"),
-        
-        # Alarmes et détections
-        "alarmMd": check_capability("motion_detection"),
-        
-        # Performance
         "performance": check_capability("performance"),
-        
-        # Push notifications
-        "push": check_capability("push"),
-        "supportPushInterval": check_capability("push_config"),
-        
-        # Stockage SD Card
-        "sdCard": check_capability("recording"),
-        
-        # Email
-        "email": check_capability("email"),
-        
-        # FTP
-        "ftp": check_capability("ftp"),
-        
-        # LED Control
-        "ledControl": check_api_version("ledControl"),
-        
-        # Spotlight/Floodlight
-        "supportFLswitch": check_capability("floodLight"),
-        "supportFLBrightness": check_api_version("supportFLBrightness"),
-        
-        # Alarme audio/siren
-        "alarmAudio": check_capability("audio_alarm"),
-        "supportAudioAlarm": check_api_version("supportAudioAlarm"),
-        
-        # Power LED
-        "powerLed": check_api_version("powerLed"),
-        
-        # Encodage
-        "enc": check_capability("encoding"),
-        
-        # Auto Focus
-        "disableAutoFocus": check_capability("auto_focus"),
-        
-        # Auto Maintenance
         "autoMaint": check_api_version("autoMaint"),
         
-        # PTZ
-        "ptzPreset": check_capability("ptz_presets"),
-        "ptzCtrl": check_capability("ptz"),
-        "ptzPatrol": check_capability("ptz_patrol"),
-        "supportPtzCheck": check_api_version("supportPtzCheck"),
+        # === RÉSEAU ===
+        "netPort": check_api_version("netPort"),  # GetNetPort/SetNetPort
+        "localLink": check_api_version("localLink"),  # GetLocalLink
+        "upnp": check_api_version("upnp"),
+        "p2p": check_api_version("p2p"),
+        "wifi": check_api_version("wifi"),  # Signal/SSID
+        "rtsp": check_api_version("rtsp"),  # RTSP URL
+        "onvif": check_api_version("onvif"),  # ONVIF
         
-        # Image Settings (ISP)
+        # === ALARMES ET DÉTECTIONS ===
+        "alarmMd": check_capability("motion_detection"),  # GetMdAlarm/SetMdAlarm
+        "alarmAudio": check_capability("audio_alarm"),  # Audio alarm
+        "supportAudioAlarm": check_api_version("supportAudioAlarm"),
+        
+        # === DÉTECTION IA AVANCÉE ===
+        "aiTrack": check_capability("auto_track"),  # AI tracking
+        "supportAiSensitivity": check_capability("ai_sensitivity"),
+        "supportAiStayTime": check_capability("ai_delay"),
+        "cryDetection": check_api_version("cryDetection"),  # Cry detection
+        "yoloAI": check_api_version("yoloAI"),  # YOLO AI settings
+        "smartAI": check_api_version("smartAI"),  # Smart AI (crossline, intrusion, etc.)
+        
+        # === NOTIFICATIONS ===
+        "push": check_capability("push"),
+        "supportPushInterval": check_capability("push_config"),
+        "email": check_capability("email"),
+        
+        # === STOCKAGE ET ENREGISTREMENT ===
+        "sdCard": check_capability("recording"),
+        "rec": check_capability("recording"),  # GetRec/SetRecV20
+        "preRecord": check_api_version("preRecord"),  # Pre-recording
+        "search": check_api_version("search"),  # VOD search
+        "snap": check_api_version("snap"),  # Snapshot
+        
+        # === FTP ===
+        "ftp": check_capability("ftp"),
+        
+        # === LED ET ÉCLAIRAGE ===
+        "ledControl": check_api_version("ledControl"),
+        "powerLed": check_api_version("powerLed"),  # Status LED
+        "irLights": check_api_version("irLights"),  # IR LED brightness
+        "supportFLswitch": check_capability("floodLight"),  # Floodlight/Spotlight
+        "supportFLBrightness": check_api_version("supportFLBrightness"),
+        
+        # === ENCODAGE ===
+        "enc": check_capability("encoding"),  # GetEnc/SetEnc
+        
+        # === IMAGE ET ISP ===
+        "image": check_api_version("image"),  # GetImage/SetImage
+        "isp": check_api_version("isp"),  # GetIsp/SetIsp
         "ispMirror": check_api_version("ispMirror"),
         "ispFlip": check_api_version("ispFlip"),
         "ispBackLight": check_capability("backLight"),
         "ispExposureMode": check_api_version("ispExposureMode"),
-        "isp": check_api_version("isp"),
         "ispAntiFlick": check_api_version("ispAntiFlick"),
         "isp3Dnr": check_api_version("isp3Dnr"),
         "ispHue": check_api_version("ispHue"),
         "ispSharpen": check_api_version("ispSharpen"),
-        
-        # Network
-        "upnp": check_api_version("upnp"),
-        "p2p": check_api_version("p2p"),
-        
-        # Privacy Mask
-        "mask": check_capability("privacy_mask"),
-        
-        # Image adjustments
         "white_balance": check_api_version("white_balance"),
-        "image": check_api_version("image"),
         
-        # OSD
+        # === OSD ===
         "osd": check_api_version("osd"),
         "waterMark": check_api_version("waterMark"),
         
-        # AI
-        "aiTrack": check_capability("auto_track"),
-        "supportAiSensitivity": check_capability("ai_sensitivity"),
-        "supportAiStayTime": check_capability("ai_delay"),
+        # === PRIVACY ===
+        "mask": check_capability("privacy_mask"),  # GetMask/SetMask
+        "privacyMode": check_api_version("privacyMode"),  # Privacy mode (sleep)
+        
+        # === PTZ ===
+        "ptzPreset": check_capability("ptz_presets"),
+        "ptzCtrl": check_capability("ptz"),
+        "ptzPatrol": check_capability("ptz_patrol"),
+        "ptzPosition": check_api_version("ptzPosition"),  # GetPtzCurPos
+        "supportPtzCheck": check_api_version("supportPtzCheck"),
+        
+        # === FOCUS ===
+        "disableAutoFocus": check_capability("auto_focus"),  # GetAutoFocus/SetAutoFocus
+        
+        # === AUDIO ===
+        "audioCfg": check_api_version("audioCfg"),  # GetAudioCfg/SetAudioCfg
+        "audioNoise": check_api_version("audioNoise"),  # Audio noise reduction
+        "audioAlarmPlay": check_api_version("audioAlarmPlay"),  # AudioAlarmPlay
+        
+        # === DOORBELL/CHIME ===
+        "dingDong": check_api_version("dingDong"),  # GetDingDongList
+        "dingDongCfg": check_api_version("dingDongCfg"),  # GetDingDongCfg/SetDingDongCfg
+        "dingDongSilent": check_api_version("dingDongSilent"),  # Silent mode
+        "dingDongCtrl": check_api_version("dingDongCtrl"),  # Hardwired chime control
+        "quickReply": check_api_version("quickReply"),  # QuickReplyPlay
+        
+        # === PIR SENSOR ===
+        "pirInfo": check_api_version("pirInfo"),  # GetPirInfo/SetPirInfo
+        
+        # === IO ===
+        "ioInput": check_api_version("IOInputPortNum"),  # IO inputs
+        "ioOutput": check_api_version("IOOutputPortNum"),  # IO outputs
+        
+        # === RÈGLES DE SURVEILLANCE ===
+        "surveillanceRules": check_api_version("surveillanceRules"),  # Surveillance rules (IFTTT)
+        
+        # === DAY/NIGHT ===
+        "dayNight": check_api_version("dayNight"),  # Day/night state
+        
+        # ============================================================
+        # === CAPACITÉS SUPPLÉMENTAIRES VIA HTTP API (non-Baichuan) ===
+        # ============================================================
+        
+        # === CONFIGURATION SYSTÈME (HTTP uniquement) ===
+        "getTime": {"ver": 1, "permit": 1},  # GetTime - disponible via HTTP
+        "setTime": {"ver": 1, "permit": 1},  # SetTime - disponible via HTTP
+        "getNtp": check_api_version("getNtp"),  # GetNtp
+        "setNtp": check_api_version("setNtp"),  # SetNtp
+        "syncNtp": {"ver": 1, "permit": 1},  # Sync NTP - HTTP uniquement
+        
+        # === HDD INFO (HTTP uniquement) ===
+        "hddInfo": check_api_version("GetHddInfo"),  # GetHddInfo
+        
+        # === WEBHOOKS (HTTP uniquement) ===
+        "webhook": {"ver": 1, "permit": 1},  # Webhook add/remove/test/disable
+        
+        # === ONVIF SUBSCRIPTION (HTTP uniquement) ===
+        "onvifSubscription": {"ver": 1, "permit": 1},  # ONVIF events subscription
+        
+        # === FIRMWARE (HTTP uniquement) ===
+        "checkFirmware": {"ver": 1, "permit": 1},  # check_new_firmware
+        "updateFirmware": {"ver": 1, "permit": 1},  # update_firmware
+        "uploadFirmware": {"ver": 1, "permit": 1},  # upload_firmware
+        
+        # === STREAMING (HTTP uniquement) ===
+        "rtspStream": {"ver": 1, "permit": 1},  # get_rtsp_stream_source
+        "rtmpStream": {"ver": 1, "permit": 1},  # get_rtmp_stream_source
+        "flvStream": {"ver": 1, "permit": 1},  # get_flv_stream_source
+        
+        # === VOD (HTTP uniquement) ===
+        "vodRequest": check_api_version("search"),  # request_vod_files
+        "vodDownload": {"ver": 1, "permit": 1},  # download_vod
+        
+        # === PTZ AVANCÉ (HTTP uniquement) ===
+        "ptzGuard": check_api_version("ptzGuard"),  # GetPtzGuard/SetPtzGuard
+        "ptzCalibrate": check_api_version("supportPtzCheck"),  # ptz_callibrate
+        "autoTrackSettings": check_capability("auto_track"),  # set_auto_tracking
+        "autoTrackLimit": check_capability("auto_track"),  # set_auto_track_limit
+        
+        # === ZOOM/FOCUS (HTTP uniquement) ===
+        "zoomFocus": check_api_version("supportZoomFocus"),  # get_zoom/set_zoom/get_focus/set_focus
+        
+        # === SPOTLIGHT SCHEDULE (HTTP uniquement) ===
+        "spotlightSchedule": check_api_version("supportFLSchedule"),  # set_spotlight_lighting_schedule
+        
+        # === STATE LIGHT (HTTP uniquement) ===
+        "stateLight": {"ver": 1, "permit": 1},  # set_state_light - état indicateur NVR
+        
+        # === MOTION/AI STATE POLLING (HTTP uniquement) ===
+        "motionState": check_capability("motion_detection"),  # get_motion_state/get_all_motion_states
+        "aiState": {"ver": 1, "permit": 1},  # get_ai_state/get_ai_state_all_ch
+        
+        # === USERS (HTTP uniquement) ===
+        "getUser": check_api_version("GetUser"),  # GetUser - liste utilisateurs
+        
+        # === BATTERY INFO (Baichuan push) ===
+        "battery": check_capability("battery"),  # battery info (via Baichuan push)
     }
     
-    # Scenes: disponible uniquement au niveau HomeHub (channel=None)
+    # === SCÈNES (HomeHub uniquement) ===
     if channel is None:
         abilities["scene"] = {"ver": 1, "permit": 1 if host.baichuan.supported(None, "scenes") else 0}
+        abilities["sceneManagement"] = check_api_version("sceneModeCfg")  # get_scene/set_scene/get_scene_info
+        
+        # Host-level uniquement
+        abilities["stateLight"] = {"ver": 1, "permit": 1}  # State light indicator
+        abilities["chimeList"] = {"ver": 1, "permit": 1 if len(host.chime_list) > 0 else 0}  # Chime management
     else:
         abilities["scene"] = {"ver": 1, "permit": 0}
     
