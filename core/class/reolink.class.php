@@ -1303,6 +1303,7 @@ class reolink extends eqLogic {
     $cmd .= ' --webhook_port ' . config::byKey('webhookport', __CLASS__, '44010');
     $cmd .= ' --reolink_aio_api_port ' . config::byKey('reolink_aio_api_port', __CLASS__, '44011');
     $cmd .= ' --detection_mode ' . config::byKey('detection_mode', __CLASS__, 'onvif');
+    $cmd .= ' --reolink_aio_log_level ' . config::byKey('reolink_aio_log_level', __CLASS__, 'warning');
     log::add(__CLASS__, 'info', 'Lancement démon');
     $result = exec($cmd . ' >> ' . log::getPathToLog('reolink_daemon') . ' 2>&1 &');
     $i = 0;

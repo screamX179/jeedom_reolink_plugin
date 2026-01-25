@@ -209,7 +209,6 @@ local_ip = (([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if n
 
 
 if os.path.exists("jeedomcreds"):
-    logging.debug('Removing previous cred files')
     os.remove("jeedomcreds")
 
 _log_level = "error"
@@ -222,6 +221,7 @@ _callback = ''
 _webhook_ip = local_ip
 _webhook_port = '44010'
 _reolink_aio_api_port = 44011
+_reolink_aio_log_level = 'warning'  # Default log level for reolink_aio library
 _detection_mode = 'onvif'  # Default: onvif or baichuan
 _cycle = 0.3
 
@@ -237,6 +237,7 @@ parser.add_argument("--socketport", help="Port for server", type=str)
 parser.add_argument("--webhook_ip", help="IP for webhook", type=str)
 parser.add_argument("--webhook_port", help="Port for webhook", type=str)
 parser.add_argument("--reolink_aio_api_port", help="Port for Reolink AIO API", type=str)
+parser.add_argument("--reolink_aio_log_level", help="Log level for reolink_aio library", type=str)
 parser.add_argument("--detection_mode", help="Motion detection mode: onvif or baichuan", type=str)
 args = parser.parse_args()
 
@@ -260,6 +261,8 @@ if args.webhook_port:
     _webhook_port = int(args.webhook_port)
 if args.reolink_aio_api_port:
     _reolink_aio_api_port = int(args.reolink_aio_api_port)
+if args.reolink_aio_log_level:
+    _reolink_aio_log_level = str(args.reolink_aio_log_level)
 if args.detection_mode:
     _detection_mode = str(args.detection_mode).lower()
     if _detection_mode not in ['onvif', 'baichuan']:
@@ -269,6 +272,11 @@ if args.detection_mode:
 _socket_port = int(_socket_port)
 
 jeedom_utils.set_log_level(_log_level)
+
+# Configure reolink_aio logger separately
+reolink_aio_logger = logging.getLogger('reolink_aio')
+reolink_aio_logger.setLevel(jeedom_utils.convert_log_level(_reolink_aio_log_level))
+
 jeedom_cnx = jeedom_com(_apikey, _callback)
 
 logging.info('Start demond')
@@ -281,6 +289,7 @@ logging.info('Device : %s', _device)
 logging.info('Webhook IP : %s', _webhook_ip)
 logging.info('Webhook port : %s', _webhook_port)
 logging.info('Reolink AIO API port : %s', _reolink_aio_api_port)
+logging.info('Reolink AIO log level : %s', _reolink_aio_log_level)
 logging.info('Detection mode : %s', _detection_mode)
 
 try:

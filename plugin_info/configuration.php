@@ -97,5 +97,20 @@ if (!isConnect()) {
         <input class="configKey form-control" data-l1key="reolink_aio_api_port" value="44011" />
       </div>
     </div>
+    <div class="form-group">
+      <label class="col-md-4 control-label">{{Niveau de log API Reolink}}
+        <sup><i class="fas fa-question-circle tooltips" title="{{Niveau de détail des logs de la bibliothèque reolink_aio (séparé des logs du plugin)}}"></i></sup>
+      </label>
+      <div class="col-md-4">
+        <select class="configKey form-control" data-l1key="reolink_aio_log_level">
+            <option value="none">Aucun</option>
+            <option value="critical">Critique</option>
+            <option value="error">Erreur</option>
+            <option value="warning">Warning</option>
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+        </select>
+      </div>
+    </div>
   </fieldset>
 </form>
