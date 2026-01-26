@@ -104,7 +104,7 @@ async def active_preset(camera_name, preset_id, cameras):
 
 async def enable_motion_detection(camera_name, cameras):
     """Enable motion detection monitoring via Baichuan events subscription."""
-    logging.error('Enable motion detection on camera %s', camera_name)
+    logging.info('Enable motion detection on camera %s', camera_name)
     
     if camera_name not in cameras:
         logging.error('Camera %s not found', camera_name)
@@ -128,10 +128,11 @@ async def enable_motion_detection(camera_name, cameras):
         
         channel = cam_config.get('channel', 0)
         camera_ip = cam_config.get('host')
+        callback_id = f'{camera_name}_ch{channel}_motion'
         
         # Create callback for motion events
         def motion_callback():
-            logging.error('Motion event callback for %s', camera_name)
+            logging.debug('Motion event callback id=%s for %s (channel %d)', callback_id, camera_name, channel)
             
             try:
                 # Basic motion detection - send in same format as ONVIF webhook
@@ -139,10 +140,11 @@ async def enable_motion_detection(camera_name, cameras):
                 event_data = {
                     'message': 'motion',
                     'ip': camera_ip,
+                    'channel': channel,
                     'motionstate': motion_value
                 }
                 jeedom_cnx.send_change_immediate(event_data)
-                logging.error('Motion event sent for %s (state=%s)', camera_name, motion_value)
+                logging.debug('Motion event sent for %s channel %d (state=%s)', camera_name, channel, motion_value)
                 
                 # AI detections - send as separate ONVIF-style events if supported
                 if camera_api.ai_supported(channel):
@@ -151,6 +153,7 @@ async def enable_motion_detection(camera_name, cameras):
                     people_event = {
                         'message': 'EvPeopleDetect',
                         'ip': camera_ip,
+                        'channel': channel,
                         'motionstate': people_value
                     }
                     jeedom_cnx.send_change_immediate(people_event)
@@ -161,6 +164,7 @@ async def enable_motion_detection(camera_name, cameras):
                     vehicle_event = {
                         'message': 'EvVehicleDetect',
                         'ip': camera_ip,
+                        'channel': channel,
                         'motionstate': vehicle_value
                     }
                     jeedom_cnx.send_change_immediate(vehicle_event)
@@ -171,6 +175,7 @@ async def enable_motion_detection(camera_name, cameras):
                     pet_event = {
                         'message': 'EvDogCatDetect',
                         'ip': camera_ip,
+                        'channel': channel,
                         'motionstate': pet_value
                     }
                     jeedom_cnx.send_change_immediate(pet_event)
@@ -181,7 +186,6 @@ async def enable_motion_detection(camera_name, cameras):
                 logging.debug(traceback.format_exc())
         
         # Register callback and subscribe to events
-        callback_id = f'{camera_name}_ch{channel}_motion'
         camera_api.baichuan.register_callback(callback_id, motion_callback, 33, channel)
         
         # Debug : vérifier que le callback est bien enregistré

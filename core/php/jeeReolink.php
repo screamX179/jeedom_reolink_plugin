@@ -26,6 +26,7 @@ try {
         foreach ($eqLogics as $eqLogic) {
             $camera_contact_point = $eqLogic->getConfiguration('adresseip');
             $camera_AI = $eqLogic->getConfiguration('supportai');
+            $camera_channel = intval($eqLogic->getConfiguration('defined_channel', 0)); // Channel 0-indexed
 
             if (filter_var($camera_contact_point, FILTER_VALIDATE_IP)) {
               $camera_ip = $camera_contact_point;
@@ -33,7 +34,13 @@ try {
               $camera_ip = gethostbyname($camera_contact_point);
             }
 
-            if ($camera_ip == $result['ip']) {
+            // Comparer IP ET channel pour identifier la bonne caméra
+            // En mode Baichuan : IP du NVR/HomeHub + channel spécifique
+            // En mode ONVIF : IP de la caméra individuelle (pas de channel car webhook vient de la caméra directement)
+            $ip_match = ($camera_ip == $result['ip']);
+            $channel_match = !isset($result['channel']) || ($camera_channel == $result['channel']);
+            
+            if ($ip_match && $channel_match) {
               if ($result['message'] == "motion") {
                 log::add('reolink', 'debug',  'Cam IP='.$result['ip']. ' Onvif event reçu depuis le daemon. name= MDstate, état='.$result['motionstate']);
                 $eqLogic->checkAndUpdateCmd('MdState', $result['motionstate']);
