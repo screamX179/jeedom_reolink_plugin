@@ -56,11 +56,25 @@ class reolink extends eqLogic {
     
     // Sinon, utiliser la méthode classique
     $reolinkConn = reolink::getReolinkConnection($id);
-    if ($reolinkConn->is_loggedin == true) {
-      log::add('reolink', 'info', 'Connection à la caméra réussie');
-      return true;
-    } else {
-      log::add('reolink', 'error', 'Connection à la caméra NOK');
+    
+    if (!$reolinkConn) {
+      log::add('reolink', 'error', 'Impossible de créer la connexion (credentials manquants)');
+      return false;
+    }
+    
+    // Tester réellement la connexion en envoyant une commande simple
+    try {
+      $testCmd = $reolinkConn->SendCMD('[{"cmd":"GetDevInfo"}]');
+      
+      if ($testCmd && isset($testCmd[0]['value']['DevInfo'])) {
+        log::add('reolink', 'info', 'Connection à la caméra/NVR réussie');
+        return true;
+      } else {
+        log::add('reolink', 'error', 'Connection à la caméra/NVR NOK - Pas de réponse valide');
+        return false;
+      }
+    } catch (Exception $e) {
+      log::add('reolink', 'error', 'Connection à la caméra/NVR NOK - Exception: ' . $e->getMessage());
       return false;
     }
   }
@@ -313,7 +327,7 @@ class reolink extends eqLogic {
         log::add('reolink', 'debug', 'Enregistrement : K=' . $key . ' V=' . $value);
         
         if (strpos($key, 'Enable') !== false) {
-          $value = str_replace("0", "(désactiver)", $value);
+          $value = str_replace("0", "(désactivé)", $value);
           $value = str_replace("1", "(actif)", $value);
         }
         

@@ -226,6 +226,7 @@ $daemonInfo = reolink::deamon_info();
               <th>{{Channel}}</th>
               <th>{{Actif}}</th>
               <th>{{Visible}}</th>
+              <th>{{Accessible}}</th>
               <?php if ($detectionMode == 'onvif'): ?>
               <th>{{Connexion ONVIF}}</th>
               <?php elseif ($detectionMode == 'baichuan'): ?>
@@ -265,7 +266,7 @@ $daemonInfo = reolink::deamon_info();
                 $is_active = isset($activeOnvifMap[$target_ip]);
               }
             ?>
-              <tr>
+              <tr data-eqlogic-id="<?php echo $eqLogic->getId(); ?>">
                 <td>
                   <a href="index.php?v=d&p=reolink&m=reolink&id=<?php echo $eqLogic->getId(); ?>">
                     <?php echo $eqLogic->getHumanName(); ?>
@@ -295,6 +296,11 @@ $daemonInfo = reolink::deamon_info();
                   <?php else: ?>
                     <i class="fas fa-times text-muted"></i>
                   <?php endif; ?>
+                </td>
+                <td class="connection-status">
+                  <span class="label label-default">
+                    <i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}
+                  </span>
                 </td>
                 <?php if ($detectionMode == 'onvif'): ?>
                 <td>
@@ -326,3 +332,44 @@ $daemonInfo = reolink::deamon_info();
 
   </div>
 </div>
+
+<script>
+$(function() {
+  // Tester la connexion de chaque équipement en asynchrone
+  $('tr[data-eqlogic-id]').each(function() {
+    var $row = $(this);
+    var eqLogicId = $row.data('eqlogic-id');
+    var $statusCell = $row.find('.connection-status');
+    var isNVR = $row.find('td:eq(2)').text().trim() === 'Hub';
+    
+    // Appel AJAX pour tester la connexion
+    $.ajax({
+      type: 'POST',
+      url: 'plugins/reolink/core/ajax/reolink.ajax.php',
+      data: {
+        action: 'TestConnection',
+        id: eqLogicId
+      },
+      dataType: 'json',
+      timeout: 15000, // Timeout de 15 secondes
+      global: false, // Ne pas afficher le loader Jeedom global
+      success: function(data) {
+        if (data.state == 'ok' && data.result.connected) {
+          // Équipement accessible
+          var label = isNVR ? '{{En ligne}}' : '{{Accessible}}';
+          $statusCell.html('<span class="label label-success"><i class="fas fa-check"></i> ' + label + '</span>');
+        } else {
+          // Équipement inaccessible
+          var label = isNVR ? '{{Hors ligne}}' : '{{Inaccessible}}';
+          $statusCell.html('<span class="label label-danger"><i class="fas fa-times"></i> ' + label + '</span>');
+        }
+      },
+      error: function(xhr, status, error) {
+        // Erreur ou timeout
+        var label = isNVR ? '{{Hors ligne}}' : '{{Inaccessible}}';
+        $statusCell.html('<span class="label label-danger"><i class="fas fa-times"></i> ' + label + '</span>');
+      }
+    });
+  });
+});
+</script>

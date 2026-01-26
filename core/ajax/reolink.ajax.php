@@ -79,6 +79,11 @@ try {
         }
     }
 
+    if (init('action') == 'TestConnection') {
+        $res = reolink::TryConnect(init('id'));
+        ajax::success(array('connected' => $res));
+    }
+
     throw new Exception(__('Aucune méthode correspondante à : ', __FILE__) . init('action'));
     /*     * *********Catch exeption*************** */
 } catch (Exception $e) {
