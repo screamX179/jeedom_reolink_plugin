@@ -14,6 +14,7 @@ Supportes :
 * La E1 Zoom et E1 Outdoor
 * La série TrackMix
 * La série CX
+* HomeHub/NVR (via l'api Python Reolink AIO)
 
 Non-supportés :
 
@@ -33,6 +34,7 @@ Non-supportés :
     * Port HTTP/HTTPS (ce champ est facultatif, à renseigner uniquement si vous avez personnaliser le port d'accès à l'interface web)
     * Login
     * Port ONVIF (par défaut 8000, à modifier uniquement si vous avez personnaliser le port d'accès au protocole ONVIF )
+    * Channel (utilisé uniquement pour les caméras sous NVR/HomeHub, par défaut 0)
     * Mot de passe
     * Type de connexion (http/https)
     * Auto-actualisation (cron) (par défaut réglé à 1h, ce CRON sert à actualiser les paramètres globaux de la caméra, il n'influence en rien la remontée de détection de mouvement)
@@ -42,12 +44,13 @@ Non-supportés :
 Vous pouvez tester si les paramètres sont correctes et si le plugin arrive à accéder à votre caméra via le bouton :  **"Tester la connexion"** : ![image](https://user-images.githubusercontent.com/54839700/174433973-af0f7a4a-4947-4dec-9a98-2836cae5e534.png)
 
 * Récupérez les informations de la caméra : bouton ![image](https://user-images.githubusercontent.com/54839700/174434125-261308a3-c8a7-4689-9095-0a5d56177449.png)
+* Pour un HomeHub/NVR, récupérez la liste des caméras connectées : bouton "Synchroniser les caméras"
 * Générez les commandes de la caméra : bouton ![image](https://user-images.githubusercontent.com/54839700/174434177-5f433dc2-91b5-4cdb-9bcc-8a42d6a48f0d.png)
 
 
 > IMPORTANT : Lors de mise(s) à jour du plugin Reolink, de nouvelles commandes peuvent être ajouter (cf. Changelog du plugin) pour faciliter une meilleure gestion de la caméra. **Pour bénéficier des nouvelles commandes, relancer le processus de création de commandes pour chacun de la (des) caméra(s)**
   
- > ATTENTION : La remontée de détection de mouvement depuis la caméra vers le plugin n'est pas fiable, et ne dois aucunement être utilisé en tant que système de sécurité.
+ > ATTENTION : La remontée de détection de mouvement en mode ONVIF depuis la caméra vers le plugin n'est pas fiable, et ne dois aucunement être utilisé en tant que système de sécurité.
 
 <BR><P>
 
@@ -57,11 +60,13 @@ Vous pouvez tester si les paramètres sont correctes et si le plugin arrive à a
 
 - **Methode d'authentification GET** : Modification de la manière dont le plugin s'authentifie pour utiliser l'API.
 - **Taille des blocs commandes** : Modification du nombres de commandes envoyé dans un seul bloc d'appel API, plus les blocs sont gros plus l'exécution sera rapide, mais le risque de faire planter la caméra est plus grand, plus les blocs sont petit, plus l'execution sera lente mais economise la caméra en terme d'usage.
+- **Mode de détection de mouvemement** : Permet de choisir le mode de détection de mouvement entre ONVIF (classique) et TCP/Baichuan (recommandé pour les caméras récentes).
 - **IP de callback du webhook** : Pour obtenir les détections de mouvements la caméra envoi les évènements ONVIF à un webhook. Ce webhook est le daemon du plugin, il s'agit ici de l'IP qui est transmise à la caméra sur laquelle elle devra envoyer ses notifications. \
 Les options correspondent aux paramètres que vous avez dans : Réglages > Système > Configuration > Réseaux (sous votre Jeedom)
 - **IP personnalisée** : Si vous souhaiter personnaliser l'IP vers laquelle la caméra doit renvoyer ses notifications ONVIF.
 - **Port du webhook** : Port d'appel du webhook depuis la caméra.
-
+- **Port de l'API Reolink AIO** : Port d'appel de l'API exposée par le demon qui utilise l'API Python Reolink AIO.
+- **Niveau de log API Reolink AIO** : Permet de décoréler le niveau de log de l'API Reolink AIO par rapport au niveau de log global du plugin.
 
 ### Listes des fonctions de l'API intégré dans le plugin :
 
