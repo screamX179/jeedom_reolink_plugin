@@ -366,6 +366,18 @@ class reolink extends eqLogic {
     $aiSupported = isset($fullInfo['capabilities']['ai_supported']) ? $fullInfo['capabilities']['ai_supported'] : false;
     $netPort = isset($fullInfo['NetPort']) ? $fullInfo['NetPort'] : null;
     
+    // Ajouter le nom du HomeHub parent au devInfo (nom de l'équipement Jeedom)
+    if ($devInfo) {
+      $camera = reolink::byId($id, 'reolink');
+      $parentHubId = $camera->getConfiguration('parent_hub_id');
+      if (!empty($parentHubId)) {
+        $parentHub = reolink::byId($parentHubId, 'reolink');
+        if (is_object($parentHub)) {
+          $devInfo['parent_hub_name'] = $parentHub->getName();
+        }
+      }
+    }
+    
     // Traiter les informations
     $result = reolink::processCameraInfo($id, $devInfo, $p2pUid, $localLink, $aiSupported, $netPort);
     
@@ -796,7 +808,10 @@ class reolink extends eqLogic {
     $logicalId = 'homehub_' . $homeHubId . '_ch' . $channelId;
     $existingCameras = eqLogic::byLogicalId($logicalId, 'reolink');
     if (is_object($existingCameras)) {
-      log::add('reolink', 'info', 'Équipement déjà existant pour ' . $cameraData['name'] . ' (canal ' . $channelId . ')');
+      log::add('reolink', 'info', 'Équipement déjà existant pour ' . $cameraData['name'] . ' (canal ' . $channelId . ') - Mise à jour du nom du HomeHub');
+      // Mettre à jour le nom du HomeHub sur l'équipement existant
+      $existingCameras->setConfiguration('parent_hub_name', $homeHub->getName());
+      $existingCameras->save();
       return;
     }
 
@@ -805,7 +820,10 @@ class reolink extends eqLogic {
     foreach ($allCameras as $cam) {
       if ($cam->getConfiguration('parent_hub_id') == $homeHubId && 
           $cam->getConfiguration('defined_channel') == $channelId) {
-        log::add('reolink', 'info', 'Équipement déjà existant pour ' . $cameraData['name'] . ' (ID: ' . $cam->getId() . ')');
+        log::add('reolink', 'info', 'Équipement déjà existant pour ' . $cameraData['name'] . ' (ID: ' . $cam->getId() . ') - Mise à jour du nom du HomeHub');
+        // Mettre à jour le nom du HomeHub sur l'équipement existant
+        $cam->setConfiguration('parent_hub_name', $homeHub->getName());
+        $cam->save();
         return;
       }
     }
