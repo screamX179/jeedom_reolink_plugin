@@ -22,6 +22,7 @@ try {
 
         $plugin = plugin::byId('reolink');
         $eqLogics = eqLogic::byType($plugin->getId());
+        $detection_mode = config::byKey('detection_mode', 'reolink', 'onvif');
 
         foreach ($eqLogics as $eqLogic) {
             $camera_contact_point = $eqLogic->getConfiguration('adresseip');
@@ -42,7 +43,7 @@ try {
             
             if ($ip_match && $channel_match) {
               if ($result['message'] == "motion") {
-                log::add('reolink', 'debug',  'Cam IP='.$result['ip']. ' Onvif event reçu depuis le daemon. name= MDstate, état='.$result['motionstate']);
+                log::add('reolink', 'debug',  'Cam IP='.$result['ip']. ' ' . $detection_mode . ' event reçu depuis le daemon. name= MDstate, état='.$result['motionstate']);
                 $eqLogic->checkAndUpdateCmd('MdState', $result['motionstate']);
               } 
               
@@ -56,7 +57,7 @@ try {
 # catch all pre-defined ONVIF  events with their dedicated commands, does only cover knwon ONVIF events
 
               if (strpos($result['message'], 'Ev') !== false) {
-                 log::add('reolink', 'debug', 'Cam IP='.$result['ip']. ' Onvif event reçu depuis le daemon. name= ' . $result['message'] . ', etat='.$result['motionstate']);
+                 log::add('reolink', 'debug', 'Cam IP='.$result['ip']. ' ' . $detection_mode . ' event reçu depuis le daemon. name= ' . $result['message'] . ', etat='.$result['motionstate']);
                  $eqLogic->checkAndUpdateCmd($result['message'], $result['motionstate']); 
               }
 # END  added by t0urista to handle ONVIF events
@@ -65,8 +66,6 @@ try {
               
               // En mode Baichuan, les événements AI sont déjà envoyés par le callback Python
               // En mode ONVIF, il faut interroger l'API pour récupérer les états AI
-              $detection_mode = config::byKey('detection_mode', 'reolink', 'onvif');
-              
               if ($camera_AI == "Oui" && $detection_mode == 'onvif') {
                   $camcnx = reolink::getReolinkConnection($eqLogic->getId());
                   $channel = $eqLogic->getConfiguration('channelNum') - 1;
