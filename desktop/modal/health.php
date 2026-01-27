@@ -351,7 +351,7 @@ $(function() {
         id: eqLogicId
       },
       dataType: 'json',
-      timeout: 15000, // Timeout de 15 secondes
+      timeout: 60000, // Timeout de 60 secondes
       global: false, // Ne pas afficher le loader Jeedom global
       success: function(data) {
         if (data.state == 'ok' && data.result.connected) {

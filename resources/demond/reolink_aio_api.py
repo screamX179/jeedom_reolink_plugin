@@ -282,6 +282,7 @@ async def test_connection(credentials: HomeHubCredentials):
 async def test_camera_connection(channel_id: int, credentials: HomeHubCredentials):
     """
     Teste la connexion à une caméra spécifique d'un HomeHub/NVR
+    Essaye de récupérer les informations de la caméra pour vérifier qu'elle répond
     """
     try:
         host = await get_homehub_session(credentials)
@@ -292,21 +293,36 @@ async def test_camera_connection(channel_id: int, credentials: HomeHubCredential
                 "error": f"Canal {channel_id} non trouvé"
             }
         
-        # Vérifier si la caméra est en ligne
-        is_online = host.camera_online(channel_id)
-        
-        if is_online:
+        # Forcer un refresh des données pour vérifier la connexion réelle
+        try:
+            # Refresh les données de l'hôte pour obtenir l'état actuel
+            await host.get_host_data()
+            
+            # Vérifier que la caméra est online
+            camera_online = host.camera_online(channel_id)
+            if not camera_online:
+                logging.debug(f"Caméra canal {channel_id} est hors ligne")
+                return {
+                    "success": True,
+                    "online": False,
+                    "camera_name": host.camera_name(channel_id),
+                    "camera_model": host.camera_model(channel_id)
+                }
+            
+            logging.debug(f"Caméra canal {channel_id} est en ligne")
             return {
                 "success": True,
                 "online": True,
                 "camera_name": host.camera_name(channel_id),
                 "camera_model": host.camera_model(channel_id)
             }
-        else:
+        except Exception as cmd_error:
+            # La commande a échoué, la caméra ne répond pas
+            logging.warning(f"Caméra canal {channel_id} ne répond pas: {str(cmd_error)}")
             return {
                 "success": False,
                 "online": False,
-                "error": f"La caméra {host.camera_name(channel_id)} (canal {channel_id}) est hors ligne"
+                "error": f"La caméra (canal {channel_id}) ne répond pas: {str(cmd_error)}"
             }
         
     except Exception as e:

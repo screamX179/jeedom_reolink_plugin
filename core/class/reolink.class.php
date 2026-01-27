@@ -228,12 +228,12 @@ class reolink extends eqLogic {
     
     $endpoint = '/reolink/camera/' . $config['channel_id'] . '/test-connection';
     $result = reolink::callReolinkAioAPI($endpoint, $config['credentials']);
-    
+
     if (!$result) {
       return false;
     }
     
-    if ($result['success']) {
+    if ($result['online'] === True) {
       log::add('reolink', 'info', 'Connexion à la caméra ' . $result['camera_name'] . ' (canal ' . $config['channel_id'] . ') réussie');
       return true;
     } else {
