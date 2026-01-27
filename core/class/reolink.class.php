@@ -745,18 +745,32 @@ class reolink extends eqLogic {
       'channel' => intval($camera->getConfiguration('defined_channel', 0))
     );
     
-    // Appeler l'API pour récupérer le statut
+    // Appeler l'API pour récupérer le statut de détection de mouvement
     $result = reolink::callReolinkAioAPI('/reolink/camera/motion/status', $credentials, 10);
     
     if ($result && isset($result['enabled'])) {
       $enabled = $result['enabled'] ? 1 : 0;
       $camera->checkAndUpdateCmd('motionDetectionState', $enabled);
       log::add('reolink', 'debug', 'État de détection de mouvement mis à jour: ' . $enabled);
-      return true;
     } else {
       log::add('reolink', 'warning', 'Impossible de récupérer l\'état de la détection de mouvement');
-      return false;
     }
+    
+    // Remettre à 0 les états de détection si la détection est désactivée
+    if (!$enabled) {
+      $camera->checkAndUpdateCmd('MdState', 0);
+      
+      // Si la caméra supporte l'IA, mettre aussi à 0 les états AI
+      if ($camera->getConfiguration('supportai') == 'Oui') {
+        $camera->checkAndUpdateCmd('EvPeopleDetect', 0);
+        $camera->checkAndUpdateCmd('EvVehicleDetect', 0);
+        $camera->checkAndUpdateCmd('EvDogCatDetect', 0);
+        $camera->checkAndUpdateCmd('EvPetDetect', 0);
+      }
+      log::add('reolink', 'debug', 'États de détection remis à zéro (détection désactivée)');
+    }
+    
+    return true;
   }
 
   /**

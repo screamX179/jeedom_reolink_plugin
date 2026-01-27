@@ -791,6 +791,8 @@ async def get_camera_motion_status(credentials: CameraCredentials):
         # Vérifier si la détection est activée
         enabled = await camera_commands.is_motion_detection_enabled(camera_key, cameras_config)
         
+        logging.info(f"Statut de détection pour {camera_key}: {'activé' if enabled else 'désactivé'}")
+        
         return MotionDetectionStatusResponse(
             enabled=enabled,
             camera=camera_key
