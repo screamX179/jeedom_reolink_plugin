@@ -746,7 +746,7 @@ class reolink extends eqLogic {
     );
     
     // Appeler l'API pour récupérer le statut de détection de mouvement
-    $result = reolink::callReolinkAioAPI('/reolink/camera/motion/status', $credentials, 10);
+    $result = reolink::callReolinkAioAPI('/reolink/camera/motion/status', $credentials);
     
     if ($result && isset($result['enabled'])) {
       $enabled = $result['enabled'] ? 1 : 0;
