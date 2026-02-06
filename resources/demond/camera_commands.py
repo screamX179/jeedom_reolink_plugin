@@ -146,6 +146,17 @@ async def enable_motion_detection(camera_name, cameras):
                 jeedom_cnx.send_change_immediate(event_data)
                 logging.debug('Motion event sent for %s channel %d (state=%s)', camera_name, channel, motion_value)
                 
+                # Visitor detection (doorbell)
+                visitor_value = 1 if camera_api.visitor_detected(channel) else 0
+                visitor_event = {
+                    'message': 'EvVisitor',
+                    'ip': camera_ip,
+                    'channel': channel,
+                    'motionstate': visitor_value
+                }
+                jeedom_cnx.send_change_immediate(visitor_event)
+                logging.debug('Visitor detection event sent: %s', visitor_value)
+                
                 # AI detections - send as separate ONVIF-style events if supported
                 if camera_api.ai_supported(channel):
                     # People detection
