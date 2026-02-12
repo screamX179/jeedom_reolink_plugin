@@ -138,13 +138,23 @@ $daemonInfo = reolink::deamon_info();
         </div>
       <?php endif; ?>
 
-      <!-- Caméras avec détection Baichuan active -->
+      <!--            -->
       <?php if ($detectionMode == 'baichuan' && isset($healthInfo['active_baichuan_cameras']) && count($healthInfo['active_baichuan_cameras']) > 0): ?>
+        <?php 
+        // Calculer le nombre total de combinaisons IP:channel actives
+        $totalActiveChannels = 0;
+        foreach ($healthInfo['active_baichuan_cameras'] as $camera) {
+          if (isset($camera['channels']) && is_array($camera['channels'])) {
+            $totalActiveChannels += count($camera['channels']);
+          }
+        }
+        ?>
         <div class="panel panel-info">
           <div class="panel-heading">
             <h4 class="panel-title">
               <i class="fas fa-video"></i> {{Caméras avec détection Baichuan active}}
-              <span class="badge"><?php echo count($healthInfo['active_baichuan_cameras']); ?></span>
+              <span class="badge"><?php echo $totalActiveChannels; ?></span>
+              <small>(<?php echo count($healthInfo['active_baichuan_cameras']); ?> <?php echo count($healthInfo['active_baichuan_cameras']) > 1 ? 'connexions' : 'connexion'; ?>)</small>
             </h4>
           </div>
           <div class="panel-body">
