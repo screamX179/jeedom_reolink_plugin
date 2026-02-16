@@ -32,6 +32,9 @@ _locks_mutex = asyncio.Lock()
 
 
 async def validate_session(session_data):
+
+    return True
+
     """Validate if cached session is still active."""
     try:
         host = session_data.get('host')
@@ -78,6 +81,10 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
     
     # Use camera-specific lock to prevent concurrent connections
     async with camera_lock:
+        # Log cache contents for debugging
+        logging.debug('Camera sessions cache: %s', list(camera_sessions.keys()))
+        logging.debug('Current camera_key: %s', camera_key)
+
         # Re-check cache inside lock (another coroutine might have created the session)
         if camera_key in camera_sessions:
             logging.debug('Checking cached session for %s', camera_key)
@@ -132,6 +139,9 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
 
 
 async def cleanup_expired_sessions():
+
+    return
+
     """Clean up expired sessions based on TTL."""
     if not camera_sessions:
         return
