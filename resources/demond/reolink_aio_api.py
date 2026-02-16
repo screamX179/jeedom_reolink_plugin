@@ -73,9 +73,13 @@ def mask_credentials_for_log(credentials: HomeHubCredentials) -> str:
     username_masked = credentials.username[:3] + '***' if len(credentials.username) > 3 else '***'
     return f"host={credentials.host}:{credentials.port}, user={username_masked}, https={credentials.use_https}"
 
-async def get_homehub_session(credentials: HomeHubCredentials) -> Host:
+async def get_homehub_session(credentials: HomeHubCredentials, refresh: bool = False) -> Host:
     """
     Obtient ou crée une session HomeHub (utilise le cache partagé)
+    
+    Args:
+        credentials: Identifiants de connexion au HomeHub
+        refresh: Si True, force un rafraîchissement des données via get_host_data()
     """
     session_key = f"{credentials.host}:{credentials.port}"
     
@@ -92,6 +96,10 @@ async def get_homehub_session(credentials: HomeHubCredentials) -> Host:
     
     if not host:
         raise HTTPException(status_code=500, detail=f"Échec de connexion au HomeHub: {credentials.host}")
+    
+    # Force un refresh des données si demandé
+    if refresh:
+        await host.get_host_data()
     
     return host
 
@@ -285,7 +293,8 @@ async def test_camera_connection(channel_id: int, credentials: HomeHubCredential
     Essaye de récupérer les informations de la caméra pour vérifier qu'elle répond
     """
     try:
-        host = await get_homehub_session(credentials)
+        # Forcer un refresh des données pour vérifier la connexion réelle
+        host = await get_homehub_session(credentials, True)
         
         if channel_id not in host.channels:
             return {
@@ -293,11 +302,7 @@ async def test_camera_connection(channel_id: int, credentials: HomeHubCredential
                 "error": f"Canal {channel_id} non trouvé"
             }
         
-        # Forcer un refresh des données pour vérifier la connexion réelle
         try:
-            # Refresh les données de l'hôte pour obtenir l'état actuel
-            await host.get_host_data()
-            
             # Vérifier que la caméra est online
             camera_online = host.camera_online(channel_id)
             if not camera_online:
