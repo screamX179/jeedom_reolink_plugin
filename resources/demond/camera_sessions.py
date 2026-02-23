@@ -30,33 +30,6 @@ SESSION_TTL_MINUTES = 30
 _connection_locks = {}
 _locks_mutex = asyncio.Lock()
 
-
-async def validate_session(session_data):
-    """Validate if cached session is still active."""
-    try:
-        host = session_data.get('host')
-        if not host:
-            return False
-        
-        # Check if session is active using native API
-        if not host.session_active:
-            logging.debug("Session is not active")
-            return False
-        
-        # Check TTL
-        last_used = session_data.get('last_used')
-        if last_used:
-            age = datetime.now() - last_used
-            if age > timedelta(minutes=SESSION_TTL_MINUTES):
-                logging.debug("Session expired (age: %s)", age)
-                return False
-        
-        return True
-    except Exception as e:
-        logging.debug(f"Session validation error: {e}")
-        return False
-
-
 async def get_camera_session(camera_key, host, username, password, port=9000):
     """Get or create camera session (with caching and validation).
     
@@ -78,26 +51,21 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
     
     # Use camera-specific lock to prevent concurrent connections
     async with camera_lock:
+        # Log cache contents for debugging
+        logging.debug('Camera sessions cache: %s', list(camera_sessions.keys()))
+        logging.debug('Current camera_key: %s', camera_key)
+
         # Re-check cache inside lock (another coroutine might have created the session)
         if camera_key in camera_sessions:
             logging.debug('Checking cached session for %s', camera_key)
             session_data = camera_sessions[camera_key]
             
-            # Validate the cached session
-            if await validate_session(session_data):
-                logging.debug('Using validated cached session for %s', camera_key)
-                # Update last_used and move to end (most recently used)
-                session_data['last_used'] = datetime.now()
-                camera_sessions.move_to_end(camera_key)
-                return session_data['host']
-            else:
-                logging.info('Cached session for %s is invalid, reconnecting', camera_key)
-                # Remove invalid session from cache
-                del camera_sessions[camera_key]
-                try:
-                    await session_data['host'].logout()
-                except:
-                    pass
+            logging.debug('Using cached session for %s (host: %s, last_used: %s)', 
+                         camera_key, session_data['host'].host, session_data['last_used'])
+            # Update last_used and move to end (most recently used)
+            session_data['last_used'] = datetime.now()
+            camera_sessions.move_to_end(camera_key)
+            return session_data['host']
         
         try:
             logging.debug('Creating new session for %s', camera_key)
@@ -129,31 +97,6 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
         except Exception as e:
             logging.error('Failed to connect to camera %s: %s', camera_key, repr(e))
             return None
-
-
-async def cleanup_expired_sessions():
-    """Clean up expired sessions based on TTL."""
-    if not camera_sessions:
-        return
-    
-    now = datetime.now()
-    expired_keys = []
-    
-    for key, session_data in list(camera_sessions.items()):
-        last_used = session_data.get('last_used')
-        if last_used:
-            age = now - last_used
-            if age > timedelta(minutes=SESSION_TTL_MINUTES):
-                expired_keys.append(key)
-    
-    for key in expired_keys:
-        logging.info("Cleaning up expired session: %s", key)
-        session_data = camera_sessions.pop(key)
-        try:
-            await session_data['host'].logout()
-        except Exception as e:
-            logging.warning('Error logging out from %s: %s', key, e)
-
 
 async def cleanup_all_sessions():
     """Clean up all cached camera sessions."""

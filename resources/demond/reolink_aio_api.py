@@ -311,7 +311,8 @@ async def test_camera_connection(channel_id: int, credentials: HomeHubCredential
                     "success": True,
                     "online": False,
                     "camera_name": host.camera_name(channel_id),
-                    "camera_model": host.camera_model(channel_id)
+                    "camera_model": host.camera_model(channel_id),
+                    "error": f"Caméra canal {channel_id} hors ligne"
                 }
             
             logging.debug(f"Caméra canal {channel_id} est en ligne")
@@ -1089,8 +1090,6 @@ async def health_check():
     """
     Vérification de santé de l'API
     """
-    # Nettoyer les sessions expirées
-    await camera_sessions.cleanup_expired_sessions()
     
     # Récupérer les caméras avec détection Baichuan active
     active_baichuan = camera_commands.get_active_cameras()

@@ -50,7 +50,7 @@ class reolink extends eqLogic {
     // Vérifier si c'est une caméra sous HomeHub
     $parentHubId = $camera->getConfiguration('parent_hub_id');
     if (!empty($parentHubId)) {
-      log::add('reolink', 'info', 'Test de connexion à la caméra HomeHub via API');
+      log::add('reolink', 'info', 'Test de connexion à la caméra HomeHub via API (ID: ' . $id . ', Parent Hub ID: ' . $parentHubId . ')');
       return reolink::TryConnectHomeHubCamera($id);
     }
     
@@ -178,7 +178,7 @@ class reolink extends eqLogic {
   /**
    * Appel générique à l'API Reolink (reolink-aio)
    */
-  private static function callReolinkAioAPI($endpoint, $credentials, $timeout = 30) {
+  private static function callReolinkAioAPI($endpoint, $credentials, $timeout = 120) {
     $apiPort = config::byKey('reolink_aio_api_port', __CLASS__, '44011');
     $apiUrl = 'http://127.0.0.1:' . $apiPort . $endpoint;
     
@@ -237,7 +237,7 @@ class reolink extends eqLogic {
       log::add('reolink', 'info', 'Connexion à la caméra ' . $result['camera_name'] . ' (canal ' . $config['channel_id'] . ') réussie');
       return true;
     } else {
-      log::add('reolink', 'error', 'Échec connexion caméra: ' . $result['error']);
+      log::add('reolink', 'info', 'Échec connexion caméra: ' . $result['error']);
       return false;
     }
   }
