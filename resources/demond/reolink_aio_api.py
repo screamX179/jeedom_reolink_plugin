@@ -1090,8 +1090,6 @@ async def health_check():
     """
     Vérification de santé de l'API
     """
-    # Nettoyer les sessions expirées
-    await camera_sessions.cleanup_expired_sessions()
     
     # Récupérer les caméras avec détection Baichuan active
     active_baichuan = camera_commands.get_active_cameras()
