@@ -43,7 +43,12 @@ $eqLogics = eqLogic::byType($plugin->getId());
 			foreach ($eqLogics as $eqLogic) {
 				$opacity = ($eqLogic->getIsEnable()) ? '' : 'disableCard';
 				echo '<div class="eqLogicDisplayCard cursor '.$opacity.'" data-eqLogic_id="' . $eqLogic->getId() . '">';
-				echo '<img src="' . $plugin->getPathImgIcon() . '"/>';
+				// Utiliser l'image de la caméra si elle existe, sinon l'icône du plugin
+				$imgPath = 'plugins/reolink/desktop/img/camera' . $eqLogic->getId() . '.png';
+				if (empty($imgPath) || !file_exists(__DIR__ . '/../../../../' . $imgPath)) {
+					$imgPath = $plugin->getPathImgIcon();
+				}
+				echo '<img src="' . $imgPath . '"/>';
 				echo '<br>';
 				echo '<span class="name">' . $eqLogic->getHumanName(true, true) . '</span>';
 				echo '</div>';
