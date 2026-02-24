@@ -122,14 +122,40 @@ def get_logger_text():
         return "critical"
 
 
+def _get_uvicorn_log_config():
+    """Retourne une config logging Uvicorn au format Jeedom."""
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "jeedom": {
+                "format": "[%(asctime)-15s][%(levelname)s] : %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+        },
+        "handlers": {
+            "default": {
+                "class": "logging.StreamHandler",
+                "formatter": "jeedom",
+                "stream": "ext://sys.stderr",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        },
+    }
+
+
 def run_uvicorn():
     logging.info('Starting webhook (ONVIF mode)...')
-    uvicorn.run(app="camhook:app", host="0.0.0.0", port=_webhook_port, log_level=get_logger_text())
+    uvicorn.run(app="camhook:app", host="0.0.0.0", port=_webhook_port, log_level=get_logger_text(), log_config=_get_uvicorn_log_config())
 
 
 def run_reolink_aio_api():
     logging.info('Starting Reolink API (reolink-aio)...')
-    uvicorn.run(app="reolink_aio_api:app", host="127.0.0.1", port=_reolink_aio_api_port, log_level=get_logger_text())
+    uvicorn.run(app="reolink_aio_api:app", host="127.0.0.1", port=_reolink_aio_api_port, log_level=get_logger_text(), log_config=_get_uvicorn_log_config())
 
 
 def start_uvicorn():
