@@ -1116,7 +1116,6 @@ async def health_check():
     return {
         "status": "healthy",
         "active_sessions": len(camera_sessions.camera_sessions),
-        "session_ttl_minutes": camera_sessions.SESSION_TTL_MINUTES,
         "active_baichuan_cameras": active_baichuan
     }
 

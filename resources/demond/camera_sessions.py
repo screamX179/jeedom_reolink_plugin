@@ -24,7 +24,6 @@ from reolink_aio.api import Host
 # Global cache for camera sessions (LRU with max size)
 camera_sessions = OrderedDict()
 MAX_CACHE_SIZE = 20
-SESSION_TTL_MINUTES = 30
 
 # Locks per camera to prevent concurrent connection attempts
 _connection_locks = {}
