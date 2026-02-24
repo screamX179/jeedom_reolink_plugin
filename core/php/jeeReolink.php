@@ -59,6 +59,21 @@ try {
               if (strpos($result['message'], 'Ev') !== false) {
                  log::add('reolink', 'debug', 'Cam IP='.$result['ip']. ' ' . $detection_mode . ' event reçu depuis le daemon. name= ' . $result['message'] . ', etat='.$result['motionstate']);
                  $eqLogic->checkAndUpdateCmd($result['message'], $result['motionstate']); 
+                 
+                 // En mode Baichuan, mettre à jour MdState : 1 si au moins un Ev* est à 1, sinon 0
+                 if ($detection_mode == 'baichuan') {
+                   $evCommands = ['EvMotion', 'EvFaceDetect', 'EvPeopleDetect', 'EvVehicleDetect', 'EvDogCatDetect', 'EvMotionAlarm', 'EvVisitor', 'EvPetDetect'];
+                   $mdState = 0;
+                   foreach ($evCommands as $cmdName) {
+                     $cmd = $eqLogic->getCmd('info', $cmdName);
+                     if (is_object($cmd) && $cmd->execCmd() == 1) {
+                       $mdState = 1;
+                       break;
+                     }
+                   }
+                   log::add('reolink', 'debug', 'Cam IP='.$result['ip']. ' Mode Baichuan : MdState calculé = ' . $mdState);
+                   $eqLogic->checkAndUpdateCmd('MdState', $mdState);
+                 }
               }
 # END  added by t0urista to handle ONVIF events
 

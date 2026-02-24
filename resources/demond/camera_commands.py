@@ -136,9 +136,9 @@ async def enable_motion_detection(camera_name, cameras):
             
             try:
                 # Basic motion detection - send in same format as ONVIF webhook
-                motion_value = camera_api.motion_detected(channel)
+                motion_value = 1 if camera_api.motion_detected(channel) else 0
                 event_data = {
-                    'message': 'motion',
+                    'message': 'EvMotion',
                     'ip': camera_ip,
                     'channel': channel,
                     'motionstate': motion_value
