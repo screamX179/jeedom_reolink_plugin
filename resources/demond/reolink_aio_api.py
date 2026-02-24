@@ -85,34 +85,19 @@ async def get_homehub_session(credentials: HomeHubCredentials, refresh: bool = F
     
     logging.info(f"Demande de session pour {mask_credentials_for_log(credentials)}")
     
-    # Utilise le système de cache partagé
+    # Utilise le système de cache partagé (refresh et recréation atomique gérés dans get_camera_session)
     host = await camera_sessions.get_camera_session(
         camera_key=session_key,
         host=credentials.host,
         username=credentials.username,
         password=credentials.password,
-        port=credentials.port
+        port=credentials.port,
+        refresh=refresh
     )
-    
+
     if not host:
         raise HTTPException(status_code=500, detail=f"Échec de connexion au HomeHub: {credentials.host}")
-    
-    # Force un refresh des données si demandé
-    if refresh:
-        await host.get_host_data()
-        if host.new_devices:
-            # Recreate the session atomically to ensure we have the latest device list
-            logging.info(f"Nouveaux appareils découverts après rafraîchissement pour {credentials.host}") 
-            host = await camera_sessions.recreate_camera_session(
-                camera_key=session_key,
-                host=credentials.host,
-                username=credentials.username,
-                password=credentials.password,
-                port=credentials.port
-            )
-            if not host:
-                raise HTTPException(status_code=500, detail=f"Échec de recréation de session HomeHub: {credentials.host}")
-    
+
     return host
 
 @app.post("/reolink/discover", response_model=HomeHubInfo)
@@ -834,7 +819,8 @@ async def refresh_camera_info(channel_id: int, credentials: HomeHubCredentials):
     Retourne un format compatible avec refreshNFO PHP (array de commandes avec 'cmd' et 'value')
     """
     try:
-        host = await get_homehub_session(credentials)
+        # refresh=True pour détecter les new_devices périodiquement (toutes les 15mn par défaut)
+        host = await get_homehub_session(credentials, refresh=True)
         
         if channel_id not in host.channels:
             raise HTTPException(status_code=404, detail=f"Canal {channel_id} non trouvé")

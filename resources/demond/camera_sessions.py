@@ -57,52 +57,87 @@ async def _create_and_cache_session(camera_key, host, username, password, port=9
 
     return api
 
-async def get_camera_session(camera_key, host, username, password, port=9000):
-    """Get or create camera session (with caching and validation).
-    
+async def get_camera_session(camera_key, host, username, password, port=9000, refresh=False):
+    """Get or create a camera session, with optional host-data refresh and atomic recreation.
+
     Args:
         camera_key: Unique key for caching (e.g., "192.168.1.100:9000")
-        host: Camera IP or hostname
-        username: Camera username
-        password: Camera password
-        port: Camera port (default 9000)
-        
+        host:       Camera IP or hostname
+        username:   Camera username
+        password:   Camera password
+        port:       Camera port (default 9000)
+        refresh:    If True, call get_host_data() on the cached session and recreate it
+                    atomically when new devices are detected. Concurrent callers that
+                    arrive while a recreation is already in progress will reuse the
+                    already-recreated session instead of triggering redundant reconnections.
+
     Returns:
-        Host API object or None if connection fails
+        Host API object, or None if the connection fails.
     """
     camera_lock = await _get_camera_lock(camera_key)
-    
-    # Use camera-specific lock to prevent concurrent connections
+
+    # ── Step 1: get or create session (fast, under lock) ──────────────────────
     async with camera_lock:
-        # Log cache contents for debugging
         logging.debug('Camera sessions cache: %s', list(camera_sessions.keys()))
         logging.debug('Current camera_key: %s', camera_key)
 
-        # Re-check cache inside lock (another coroutine might have created the session)
         if camera_key in camera_sessions:
-            logging.debug('Checking cached session for %s', camera_key)
             session_data = camera_sessions[camera_key]
-            
-            logging.debug('Using cached session for %s (host: %s, last_used: %s)', 
-                         camera_key, session_data['host'].host, session_data['last_used'])
-            # Update last_used and move to end (most recently used)
+            logging.debug('Using cached session for %s (host: %s, last_used: %s)',
+                          camera_key, session_data['host'].host, session_data['last_used'])
             session_data['last_used'] = datetime.now()
             camera_sessions.move_to_end(camera_key)
-            return session_data['host']
-        
+            api = session_data['host']
+        else:
+            try:
+                logging.debug('Creating new session for %s', camera_key)
+                api = await _create_and_cache_session(camera_key, host, username, password, port)
+                logging.info('Camera %s session established and cached', camera_key)
+            except asyncio.TimeoutError:
+                logging.error('Timeout connecting to camera %s', camera_key)
+                return None
+            except Exception as e:
+                logging.error('Failed to connect to camera %s: %s', camera_key, repr(e))
+                return None
+
+        # Capture timestamp now so concurrent refresh callers can detect a later recreation
+        observed_at = camera_sessions[camera_key]['last_used']
+
+    if not refresh:
+        return api
+
+    # ── Step 2: refresh host data (slow, outside lock) ────────────────────────
+    await api.get_host_data()
+
+    if not api.new_devices:
+        return api
+
+    # ── Step 3: new devices detected – recreate session atomically ────────────
+    logging.info('New devices discovered for %s, recreating session', camera_key)
+    async with camera_lock:
+        current = camera_sessions.get(camera_key)
+
+        # Another coroutine already recreated while we were in get_host_data()
+        if current and current['last_used'] > observed_at:
+            logging.debug('Session for %s already recreated by another coroutine, reusing', camera_key)
+            return current['host']
+
+        previous_host = current['host'] if current else None
         try:
-            logging.debug('Creating new session for %s', camera_key)
             api = await _create_and_cache_session(camera_key, host, username, password, port)
-            
-            logging.info('Camera %s session established and cached', camera_key)
+            if previous_host and previous_host is not api:
+                try:
+                    await previous_host.logout()
+                except Exception as e:
+                    logging.warning('Error logging out from previous camera %s session: %s', camera_key, e)
+            logging.info('Camera %s session recreated and cached', camera_key)
             return api
-            
         except asyncio.TimeoutError:
-            logging.error('Timeout connecting to camera %s', camera_key)
-            return None
+            logging.error('Timeout recreating session for camera %s', camera_key)
+            return previous_host
         except Exception as e:
-            logging.error('Failed to connect to camera %s: %s', camera_key, repr(e))
-            return None
+            logging.error('Failed to recreate session for camera %s: %s', camera_key, repr(e))
+            return previous_host
 
 async def remove_camera_session(camera_key):
     """Remove a cached camera session and logout cleanly.
@@ -130,47 +165,6 @@ async def remove_camera_session(camera_key):
         # across remove/recreate cycles.
         logging.info('Camera session removed: %s', camera_key)
         return True
-
-async def recreate_camera_session(camera_key, host, username, password, port=9000):
-    """Recreate a camera session atomically under the camera lock.
-
-    Args:
-        camera_key: Unique key used in cache (e.g., "192.168.1.100:9000")
-        host: Camera IP or hostname
-        username: Camera username
-        password: Camera password
-        port: Camera port (default 9000)
-
-    Returns:
-        New Host API object on success.
-        Existing Host object if recreation fails but one was already cached.
-        None if recreation fails and no cached session exists.
-    """
-    camera_lock = await _get_camera_lock(camera_key)
-
-    async with camera_lock:
-        previous_session = camera_sessions.get(camera_key)
-        previous_host = previous_session['host'] if previous_session else None
-
-        try:
-            logging.debug('Recreating session for %s', camera_key)
-            api = await _create_and_cache_session(camera_key, host, username, password, port)
-
-            if previous_host and previous_host is not api:
-                try:
-                    await previous_host.logout()
-                except Exception as e:
-                    logging.warning('Error logging out from previous camera %s session: %s', camera_key, e)
-
-            logging.info('Camera %s session recreated and cached', camera_key)
-            return api
-
-        except asyncio.TimeoutError:
-            logging.error('Timeout recreating session for camera %s', camera_key)
-            return previous_host
-        except Exception as e:
-            logging.error('Failed to recreate session for camera %s: %s', camera_key, repr(e))
-            return previous_host
 
 async def cleanup_all_sessions():
     """Clean up all cached camera sessions."""
