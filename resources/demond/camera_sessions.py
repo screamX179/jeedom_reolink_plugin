@@ -30,6 +30,34 @@ SESSION_TTL_MINUTES = 30
 _connection_locks = {}
 _locks_mutex = asyncio.Lock()
 
+async def _get_camera_lock(camera_key):
+    """Get or create the lock for a specific camera key."""
+    async with _locks_mutex:
+        if camera_key not in _connection_locks:
+            _connection_locks[camera_key] = asyncio.Lock()
+        return _connection_locks[camera_key]
+
+async def _create_and_cache_session(camera_key, host, username, password, port=9000):
+    """Create a Host session, fetch data, and cache it with LRU eviction."""
+    api = Host(host, username, password, port=port)
+    await asyncio.wait_for(api.get_host_data(), timeout=20.0)
+
+    camera_sessions[camera_key] = {
+        'host': api,
+        'last_used': datetime.now()
+    }
+    camera_sessions.move_to_end(camera_key)
+
+    if len(camera_sessions) > MAX_CACHE_SIZE:
+        oldest_key, oldest_data = camera_sessions.popitem(last=False)
+        logging.info('Cache full, evicting least recently used camera: %s', oldest_key)
+        try:
+            await oldest_data['host'].logout()
+        except Exception:
+            pass
+
+    return api
+
 async def get_camera_session(camera_key, host, username, password, port=9000):
     """Get or create camera session (with caching and validation).
     
@@ -43,11 +71,7 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
     Returns:
         Host API object or None if connection fails
     """
-    # Get or create lock for this camera
-    async with _locks_mutex:
-        if camera_key not in _connection_locks:
-            _connection_locks[camera_key] = asyncio.Lock()
-        camera_lock = _connection_locks[camera_key]
+    camera_lock = await _get_camera_lock(camera_key)
     
     # Use camera-specific lock to prevent concurrent connections
     async with camera_lock:
@@ -69,24 +93,7 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
         
         try:
             logging.debug('Creating new session for %s', camera_key)
-            api = Host(host, username, password, port=port)
-            await asyncio.wait_for(api.get_host_data(), timeout=20.0)
-            
-            # Cache the session with LRU eviction
-            camera_sessions[camera_key] = {
-                'host': api,
-                'last_used': datetime.now()
-            }
-            
-            # Evict oldest if cache is full
-            if len(camera_sessions) > MAX_CACHE_SIZE:
-                # Remove least recently used (first item)
-                oldest_key, oldest_data = camera_sessions.popitem(last=False)
-                logging.info('Cache full, evicting least recently used camera: %s', oldest_key)
-                try:
-                    await oldest_data['host'].logout()
-                except:
-                    pass
+            api = await _create_and_cache_session(camera_key, host, username, password, port)
             
             logging.info('Camera %s session established and cached', camera_key)
             return api
@@ -97,6 +104,74 @@ async def get_camera_session(camera_key, host, username, password, port=9000):
         except Exception as e:
             logging.error('Failed to connect to camera %s: %s', camera_key, repr(e))
             return None
+
+async def remove_camera_session(camera_key):
+    """Remove a cached camera session and logout cleanly.
+
+    Args:
+        camera_key: Unique key used in cache (e.g., "192.168.1.100:9000")
+
+    Returns:
+        True if a session was removed, False if no session existed.
+    """
+    # Use the same per-camera lock as get_camera_session to avoid races
+    camera_lock = await _get_camera_lock(camera_key)
+
+    async with camera_lock:
+        session_data = camera_sessions.pop(camera_key, None)
+        if not session_data:
+            return False
+
+        try:
+            await session_data['host'].logout()
+        except Exception as e:
+            logging.warning('Error logging out from camera %s: %s', camera_key, e)
+
+        # Keep per-camera lock persistent to preserve synchronization semantics
+        # across remove/recreate cycles.
+        logging.info('Camera session removed: %s', camera_key)
+        return True
+
+async def recreate_camera_session(camera_key, host, username, password, port=9000):
+    """Recreate a camera session atomically under the camera lock.
+
+    Args:
+        camera_key: Unique key used in cache (e.g., "192.168.1.100:9000")
+        host: Camera IP or hostname
+        username: Camera username
+        password: Camera password
+        port: Camera port (default 9000)
+
+    Returns:
+        New Host API object on success.
+        Existing Host object if recreation fails but one was already cached.
+        None if recreation fails and no cached session exists.
+    """
+    camera_lock = await _get_camera_lock(camera_key)
+
+    async with camera_lock:
+        previous_session = camera_sessions.get(camera_key)
+        previous_host = previous_session['host'] if previous_session else None
+
+        try:
+            logging.debug('Recreating session for %s', camera_key)
+            api = await _create_and_cache_session(camera_key, host, username, password, port)
+
+            if previous_host and previous_host is not api:
+                try:
+                    await previous_host.logout()
+                except Exception as e:
+                    logging.warning('Error logging out from previous camera %s session: %s', camera_key, e)
+
+            logging.info('Camera %s session recreated and cached', camera_key)
+            return api
+
+        except asyncio.TimeoutError:
+            logging.error('Timeout recreating session for camera %s', camera_key)
+            return previous_host
+        except Exception as e:
+            logging.error('Failed to recreate session for camera %s: %s', camera_key, repr(e))
+            return previous_host
 
 async def cleanup_all_sessions():
     """Clean up all cached camera sessions."""

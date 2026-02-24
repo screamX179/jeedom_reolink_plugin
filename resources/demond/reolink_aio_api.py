@@ -100,6 +100,18 @@ async def get_homehub_session(credentials: HomeHubCredentials, refresh: bool = F
     # Force un refresh des données si demandé
     if refresh:
         await host.get_host_data()
+        if host.new_devices:
+            # Recreate the session atomically to ensure we have the latest device list
+            logging.info(f"Nouveaux appareils découverts après rafraîchissement pour {credentials.host}") 
+            host = await camera_sessions.recreate_camera_session(
+                camera_key=session_key,
+                host=credentials.host,
+                username=credentials.username,
+                password=credentials.password,
+                port=credentials.port
+            )
+            if not host:
+                raise HTTPException(status_code=500, detail=f"Échec de recréation de session HomeHub: {credentials.host}")
     
     return host
 
@@ -146,7 +158,8 @@ async def discover_homehub(credentials: HomeHubCredentials):
         logging.info(f"HomeHub découvert: {model} avec {len(cameras)} caméras")
         return hub_info
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"discover_homehub -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de la découverte du HomeHub: {str(e)}")
@@ -177,7 +190,8 @@ async def get_camera_info(channel_id: int, credentials: HomeHubCredentials):
         
         return camera_data
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"get_camera_info(channel={channel_id}) -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de la récupération des infos caméra {channel_id}: {str(e)}")
@@ -250,7 +264,8 @@ async def get_camera_full_info(channel_id: int, credentials: HomeHubCredentials)
         logging.info(f"full_info = {full_info}")
         return full_info
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"get_camera_full_info(channel={channel_id}) -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de la récupération des infos complètes caméra {channel_id}: {str(e)}")
@@ -566,7 +581,8 @@ async def get_camera_ability(channel_id: int, credentials: HomeHubCredentials):
         logging.debug(f"Abilities details: {abilities}")
         return abilities
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"get_camera_ability(channel={channel_id}) -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Échec de la récupération des capacités pour caméra {channel_id}: {str(e)}")
@@ -598,14 +614,12 @@ async def close_session(credentials: HomeHubCredentials):
     Ferme une session Reolink manuellement
     """
     session_key = f"{credentials.host}:{credentials.port}"
-    
-    if session_key in camera_sessions.camera_sessions:
-        session_data = camera_sessions.camera_sessions[session_key]
-        await session_data['host'].logout()
-        del camera_sessions.camera_sessions[session_key]
+
+    removed = await camera_sessions.remove_camera_session(session_key)
+    if removed:
         logging.info(f"Session fermée manuellement: {session_key}")
         return {"message": "Session fermée"}
-    
+
     return {"message": "Aucune session active"}
 
 @app.post("/reolink/scenes")
@@ -631,7 +645,8 @@ async def get_scenes(credentials: HomeHubCredentials):
             "active_scene_name": host.baichuan.active_scene
         }
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"get_scenes -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de la récupération des scènes: {str(e)}")
@@ -686,7 +701,8 @@ async def set_scene(request: SetSceneRequest):
             "active_scene_name": current_scene_name
         }
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"set_scene -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de l'activation de la scène: {str(e)}")
@@ -727,7 +743,8 @@ async def enable_camera_motion_detection(credentials: CameraCredentials):
                 detail="Échec de l'activation de la détection de mouvement"
             )
             
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"enable_camera_motion_detection -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de l'activation de la détection: {str(e)}")
@@ -768,7 +785,8 @@ async def disable_camera_motion_detection(credentials: CameraCredentials):
                 detail="Échec de la désactivation de la détection de mouvement"
             )
             
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"disable_camera_motion_detection -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de la désactivation de la détection: {str(e)}")
@@ -1079,7 +1097,8 @@ async def refresh_camera_info(channel_id: int, credentials: HomeHubCredentials):
         logging.info(f"Informations de configuration récupérées pour caméra canal {channel_id} ({len(commands)} commandes)")
         return commands
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        logging.warning(f"refresh_camera_info(channel={channel_id}) -> HTTP {http_exc.status_code}: {http_exc.detail}")
         raise
     except Exception as e:
         logging.error(f"Erreur lors de la récupération des infos de configuration caméra {channel_id}: {str(e)}")
