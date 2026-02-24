@@ -56,8 +56,6 @@ try {
 }
 
 
-// Récupérer l'état du démon
-$daemonInfo = reolink::deamon_info();
 ?>
 
 <div class="panel panel-primary">
@@ -66,38 +64,6 @@ $daemonInfo = reolink::deamon_info();
   </div>
   <div class="panel-body">
     
-    <!-- Configuration -->
-    <div class="alert alert-info">
-      <strong><i class="fas fa-cog"></i> {{Configuration}}</strong>
-      <ul>
-        <li><strong>{{Mode de détection}} :</strong> <?php echo strtoupper($detectionMode); ?></li>
-        <li><strong>{{Port webhook (ONVIF)}} :</strong> <?php echo $webhookPort; ?></li>
-        <li><strong>{{Port API Reolink AIO}} :</strong> <?php echo $reolinkAioApiPort; ?></li>
-      </ul>
-    </div>
-
-    <!-- État du démon -->
-    <div class="alert <?php echo ($daemonInfo['state'] == 'ok') ? 'alert-success' : 'alert-danger'; ?>">
-      <strong><i class="fas fa-server"></i> {{État du démon}}</strong>
-      <ul>
-        <li><strong>{{Statut}} :</strong> 
-          <?php 
-          if ($daemonInfo['state'] == 'ok') {
-            echo '<span class="label label-success">{{Démarré}}</span>';
-          } else {
-            echo '<span class="label label-danger">{{Arrêté}}</span>';
-          }
-          ?>
-        </li>
-        <li><strong>{{Démarrage automatique}} :</strong> 
-          <?php echo ($daemonInfo['auto'] == 1) ? '<i class="fas fa-check text-success"></i> {{Oui}}' : '<i class="fas fa-times text-danger"></i> {{Non}}'; ?>
-        </li>
-        <?php if (isset($daemonInfo['launchable_message']) && $daemonInfo['launchable_message'] != ''): ?>
-        <li><strong>{{Message}} :</strong> <?php echo $daemonInfo['launchable_message']; ?></li>
-        <?php endif; ?>
-      </ul>
-    </div>
-
     <!-- Informations API/Webhook -->
     <?php if ($error): ?>
       <div class="alert alert-warning">
@@ -133,7 +99,6 @@ $daemonInfo = reolink::deamon_info();
           <ul>
             <li><strong>{{Statut}} :</strong> <span class="label label-success"><?php echo strtoupper($healthInfo['status']); ?></span></li>
             <li><strong>{{Sessions actives}} :</strong> <?php echo $healthInfo['active_sessions']; ?></li>
-            <li><strong>{{TTL des sessions}} :</strong> <?php echo $healthInfo['session_ttl_minutes']; ?> minutes</li>
           </ul>
         </div>
       <?php endif; ?>
