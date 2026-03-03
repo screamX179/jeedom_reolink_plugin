@@ -248,6 +248,7 @@ _webhook_ip = local_ip
 _webhook_port = '44010'
 _reolink_aio_api_port = 44011
 _reolink_aio_log_level = 'warning'  # Default log level for reolink_aio library
+_reolink_aio_log_file = '/var/log/jeedom/reolink_aio.log'  # Default, overridden by --reolink_aio_log_file
 _detection_mode = 'onvif'  # Default: onvif or baichuan
 _cycle = 0.3
 
@@ -264,6 +265,7 @@ parser.add_argument("--webhook_ip", help="IP for webhook", type=str)
 parser.add_argument("--webhook_port", help="Port for webhook", type=str)
 parser.add_argument("--reolink_aio_api_port", help="Port for Reolink AIO API", type=str)
 parser.add_argument("--reolink_aio_log_level", help="Log level for reolink_aio library", type=str)
+parser.add_argument("--reolink_aio_log_file", help="Log file path for reolink_aio library", type=str)
 parser.add_argument("--detection_mode", help="Motion detection mode: onvif or baichuan", type=str)
 args = parser.parse_args()
 
@@ -289,6 +291,8 @@ if args.reolink_aio_api_port:
     _reolink_aio_api_port = int(args.reolink_aio_api_port)
 if args.reolink_aio_log_level:
     _reolink_aio_log_level = str(args.reolink_aio_log_level)
+if args.reolink_aio_log_file:
+    _reolink_aio_log_file = str(args.reolink_aio_log_file)
 if args.detection_mode:
     _detection_mode = str(args.detection_mode).lower()
     if _detection_mode not in ['onvif', 'baichuan']:
@@ -299,9 +303,13 @@ _socket_port = int(_socket_port)
 
 jeedom_utils.set_log_level(_log_level)
 
-# Configure reolink_aio logger separately
+# Configure reolink_aio logger separately → fichier dédié
 reolink_aio_logger = logging.getLogger('reolink_aio')
 reolink_aio_logger.setLevel(jeedom_utils.convert_log_level(_reolink_aio_log_level))
+reolink_aio_logger.propagate = False  # Ne pas mélanger avec le log principal du démon
+_reolink_aio_handler = logging.FileHandler(_reolink_aio_log_file)
+_reolink_aio_handler.setFormatter(logging.Formatter('[%(asctime)-15s][%(levelname)s] : %(message)s', datefmt="%Y-%m-%d %H:%M:%S"))
+reolink_aio_logger.addHandler(_reolink_aio_handler)
 
 jeedom_cnx = jeedom_com(_apikey, _callback)
 

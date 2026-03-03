@@ -1350,6 +1350,7 @@ class reolink extends eqLogic {
     $cmd .= ' --reolink_aio_api_port ' . config::byKey('reolink_aio_api_port', __CLASS__, '44011');
     $cmd .= ' --detection_mode ' . config::byKey('detection_mode', __CLASS__, 'onvif');
     $cmd .= ' --reolink_aio_log_level ' . config::byKey('reolink_aio_log_level', __CLASS__, 'warning');
+    $cmd .= ' --reolink_aio_log_file ' . log::getPathToLog('reolink_aio');
     log::add(__CLASS__, 'info', 'Lancement démon');
     $result = exec($cmd . ' >> ' . log::getPathToLog('reolink_daemon') . ' 2>&1 &');
     $i = 0;
