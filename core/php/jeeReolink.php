@@ -25,6 +25,11 @@ try {
         $detection_mode = config::byKey('detection_mode', 'reolink', 'onvif');
 
         foreach ($eqLogics as $eqLogic) {
+            // Les HomeHub/NVR ne reçoivent pas d'événements motion, on les ignore
+            if ($eqLogic->getConfiguration('isNVR') === 'Oui') {
+              continue;
+            }
+
             $camera_contact_point = $eqLogic->getConfiguration('adresseip');
             $camera_AI = $eqLogic->getConfiguration('supportai');
             $camera_channel = intval($eqLogic->getConfiguration('defined_channel', 0)); // Channel 0-indexed
@@ -43,7 +48,7 @@ try {
             
             if ($ip_match && $channel_match) {
               if ($result['message'] == "motion") {
-                log::add('reolink', 'debug',  'Cam IP='.$result['ip']. ' ' . $detection_mode . ' event reçu depuis le daemon. name= MDstate, état='.$result['motionstate']);
+                log::add('reolink', 'debug',  'Cam IP='.$result['ip'].' Ch='.$camera_channel.' ' . $detection_mode . ' event reçu depuis le daemon. name= MDstate, état='.$result['motionstate']);
                 $eqLogic->checkAndUpdateCmd('MdState', $result['motionstate']);
               } 
               
@@ -57,7 +62,7 @@ try {
 # catch all pre-defined ONVIF  events with their dedicated commands, does only cover knwon ONVIF events
 
               if (strpos($result['message'], 'Ev') !== false) {
-                 log::add('reolink', 'debug', 'Cam IP='.$result['ip']. ' ' . $detection_mode . ' event reçu depuis le daemon. name= ' . $result['message'] . ', etat='.$result['motionstate']);
+                 log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' ' . $detection_mode . ' event reçu depuis le daemon. name= ' . $result['message'] . ', etat='.$result['motionstate']);
                  $eqLogic->checkAndUpdateCmd($result['message'], $result['motionstate']); 
                  
                  // En mode Baichuan, mettre à jour MdState : 1 si au moins un Ev* est à 1, sinon 0
@@ -66,12 +71,14 @@ try {
                    $mdState = 0;
                    foreach ($evCommands as $cmdName) {
                      $cmd = $eqLogic->getCmd('info', $cmdName);
-                     if (is_object($cmd) && $cmd->execCmd() == 1) {
+                     $cmdState = is_object($cmd) ? $cmd->execCmd() : 'N/A';
+                     log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' Cmd '.$cmdName.' = '.$cmdState);
+                     if (is_object($cmd) && $cmdState == 1) {
                        $mdState = 1;
                        break;
                      }
                    }
-                   log::add('reolink', 'debug', 'Cam IP='.$result['ip']. ' Mode Baichuan : MdState calculé = ' . $mdState);
+                   log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' Mode Baichuan : MdState calculé = ' . $mdState);
                    $eqLogic->checkAndUpdateCmd('MdState', $mdState);
                  }
               }
@@ -90,7 +97,7 @@ try {
                     $eqLogic->checkAndUpdateCmd('EvVehicleDetect', $res[0]['value']['vehicle']['alarm_state']);
                     $eqLogic->checkAndUpdateCmd('EvDogCatDetect', $res[0]['value']['dog_cat']['alarm_state']);
                   }
-                  log::add('reolink', 'debug', 'Cam AI (ONVIF mode) : Evènements Motion | Personne : ' . $res[0]['value']['people']['alarm_state'] . ' / Vehicule : ' . $res[0]['value']['vehicle']['alarm_state'] . ' / Chien/Chat : ' . $res[0]['value']['dog_cat']['alarm_state']);
+                  log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' AI (ONVIF mode) : Evènements Motion | Personne : ' . $res[0]['value']['people']['alarm_state'] . ' / Vehicule : ' . $res[0]['value']['vehicle']['alarm_state'] . ' / Chien/Chat : ' . $res[0]['value']['dog_cat']['alarm_state']);
               }
             }
           }
