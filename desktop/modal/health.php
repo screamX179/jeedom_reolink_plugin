@@ -21,6 +21,7 @@ if (!isConnect('admin')) {
 
 // Récupérer la configuration
 $detectionMode = config::byKey('detection_mode', 'reolink', 'onvif');
+$detectionActivation = config::byKey('detection_activation', 'reolink', 'auto');
 $webhookPort = config::byKey('webhookport', 'reolink', '44010');
 $reolinkAioApiPort = config::byKey('reolink_aio_api_port', 'reolink', '44011');
 
@@ -99,11 +100,47 @@ try {
           <ul>
             <li><strong>{{Statut}} :</strong> <span class="label label-success"><?php echo strtoupper($healthInfo['status']); ?></span></li>
             <li><strong>{{Sessions actives}} :</strong> <?php echo $healthInfo['active_sessions']; ?></li>
+            <li><strong>{{Mode d'activation}} :</strong> 
+              <?php if ($detectionActivation == 'auto'): ?>
+                <span class="label label-success">{{Auto}}</span>
+              <?php else: ?>
+                <span class="label label-warning">{{Manuel}}</span>
+              <?php endif; ?>
+            </li>
           </ul>
         </div>
+
+        <!-- Watchdog status -->
+        <?php if (isset($healthInfo['watchdog'])): ?>
+          <?php $watchdog = $healthInfo['watchdog']; ?>
+          <div class="panel panel-<?php echo $watchdog['running'] ? 'success' : 'default'; ?>">
+            <div class="panel-heading">
+              <h4 class="panel-title">
+                <i class="fas fa-shield-alt"></i> {{Watchdog détection de mouvement}}
+                <?php if ($watchdog['running']): ?>
+                  <span class="label label-success">{{Actif}}</span>
+                <?php else: ?>
+                  <span class="label label-default">{{Inactif}}</span>
+                <?php endif; ?>
+              </h4>
+            </div>
+            <?php if ($watchdog['running']): ?>
+            <div class="panel-body">
+              <ul>
+                <li><strong>{{Caméras surveillées}} :</strong> <span class="badge"><?php echo $watchdog['watched_cameras']; ?></span></li>
+                <li><strong>{{Intervalle de vérification}} :</strong> <?php echo $watchdog['interval_seconds']; ?>s</li>
+                <li><strong>{{Seuil d'inactivité}} :</strong> <?php echo $watchdog['stale_threshold_seconds']; ?>s (<?php echo intval($watchdog['stale_threshold_seconds'] / 60); ?> min)</li>
+              </ul>
+              <p class="text-muted" style="margin-top:5px;margin-bottom:0">
+                <i class="fas fa-info-circle"></i> {{Le watchdog vérifie la détection uniquement pour les caméras n'ayant pas remonté d'événement depuis le seuil d'inactivité.}}
+              </p>
+            </div>
+            <?php endif; ?>
+          </div>
+        <?php endif; ?>
       <?php endif; ?>
 
-      <!--            -->
+      <!-- Caméras Baichuan actives -->
       <?php if ($detectionMode == 'baichuan' && isset($healthInfo['active_baichuan_cameras']) && count($healthInfo['active_baichuan_cameras']) > 0): ?>
         <?php 
         // Calculer le nombre total de combinaisons IP:channel actives

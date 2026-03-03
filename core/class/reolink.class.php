@@ -1351,6 +1351,22 @@ class reolink extends eqLogic {
     $cmd .= ' --detection_mode ' . config::byKey('detection_mode', __CLASS__, 'onvif');
     $cmd .= ' --reolink_aio_log_level ' . config::byKey('reolink_aio_log_level', __CLASS__, 'warning');
     $cmd .= ' --reolink_aio_log_file ' . log::getPathToLog('reolink_aio');
+
+    // Écrire le fichier de config motion pour le daemon (avant le lancement)
+    $detection_mode = config::byKey('detection_mode', __CLASS__, 'onvif');
+    $detection_activation = config::byKey('detection_activation', __CLASS__, 'auto');
+    $motionConfigFile = $path . '/motion_cameras.json';
+    if ($detection_mode == 'baichuan' && $detection_activation == 'auto') {
+      $cameras = self::buildMotionCamerasList();
+      file_put_contents($motionConfigFile, json_encode(array('cameras' => $cameras)));
+      log::add(__CLASS__, 'info', 'Fichier motion_cameras.json écrit avec ' . count($cameras) . ' caméra(s)');
+    } else {
+      // Pas d'auto-enable : supprimer le fichier s'il existe
+      if (file_exists($motionConfigFile)) {
+        unlink($motionConfigFile);
+      }
+    }
+
     log::add(__CLASS__, 'info', 'Lancement démon');
     $result = exec($cmd . ' >> ' . log::getPathToLog('reolink_daemon') . ' 2>&1 &');
     $i = 0;
@@ -1367,7 +1383,47 @@ class reolink extends eqLogic {
       return false;
     }
     message::removeAll(__CLASS__, 'unableStartDeamon');
+
     return true;
+  }
+
+  /**
+   * Construit la liste des caméras pour l'auto-activation de la détection de mouvement
+   * @return array Liste des configurations caméra
+   */
+  private static function buildMotionCamerasList() {
+    $eqLogics = eqLogic::byType('reolink', true); // uniquement les actifs
+    $cameras = array();
+    
+    foreach ($eqLogics as $eqLogic) {
+      // Ignorer les HomeHub/NVR
+      if ($eqLogic->getConfiguration('isNVR') === 'Oui') {
+        continue;
+      }
+      
+      // Déterminer la source des credentials (HomeHub parent ou caméra autonome)
+      $parentHubId = $eqLogic->getConfiguration('parent_hub_id');
+      if (!empty($parentHubId)) {
+        $credSource = reolink::byId($parentHubId, 'reolink');
+        if (!is_object($credSource)) {
+          log::add(__CLASS__, 'warning', 'buildMotionCamerasList: HomeHub parent introuvable pour ' . $eqLogic->getName());
+          continue;
+        }
+      } else {
+        $credSource = $eqLogic;
+      }
+      
+      $cameras[] = array(
+        'host' => $credSource->getConfiguration('adresseip'),
+        'username' => $credSource->getConfiguration('login'),
+        'password' => $credSource->getConfiguration('password'),
+        'port' => intval($credSource->getConfiguration('port', 9000)),
+        'channel' => intval($eqLogic->getConfiguration('defined_channel', 0)),
+        'name' => $eqLogic->getName()
+      );
+    }
+    
+    return $cameras;
   }
 
   public static function deamon_stop() {

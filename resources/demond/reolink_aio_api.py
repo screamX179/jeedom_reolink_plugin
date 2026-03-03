@@ -6,7 +6,10 @@ Cette API permet de découvrir et gérer les caméras Reolink (autonomes ou conn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
+from contextlib import asynccontextmanager
 import asyncio
+import json
+import os
 import logging
 from reolink_aio.api import Host
 
@@ -14,10 +17,72 @@ from reolink_aio.api import Host
 import camera_sessions
 import camera_commands
 
+MOTION_CAMERAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'motion_cameras.json')
+
+
+async def _auto_enable_from_file():
+    """Read motion_cameras.json and auto-enable motion detection + start watchdog."""
+    if not os.path.isfile(MOTION_CAMERAS_FILE):
+        logging.info('No %s found – skipping auto-enable motion detection', MOTION_CAMERAS_FILE)
+        return
+
+    try:
+        with open(MOTION_CAMERAS_FILE, 'r') as f:
+            data = json.load(f)
+    except Exception as e:
+        logging.error('Failed to read %s: %s', MOTION_CAMERAS_FILE, e)
+        return
+
+    cameras = data.get('cameras', [])
+    if not cameras:
+        logging.info('motion_cameras.json is empty – nothing to auto-enable')
+        return
+
+    logging.info('Auto-enable motion detection on %d camera(s) from %s', len(cameras), MOTION_CAMERAS_FILE)
+
+    watchdog_configs = {}
+    for cam in cameras:
+        camera_key = f"{cam['host']}:{cam.get('channel', 0)}"
+        cam_config = {
+            'host': cam['host'],
+            'port': cam.get('port', 9000),
+            'username': cam['username'],
+            'password': cam['password'],
+            'channel': cam.get('channel', 0)
+        }
+        cam_label = cam.get('name', camera_key)
+        try:
+            success = await camera_commands.enable_motion_detection(camera_key, cam_config)
+            if success:
+                logging.info('Auto-enable OK: %s (ch %d)', cam_label, cam.get('channel', 0))
+            else:
+                logging.warning('Auto-enable FAILED: %s (ch %d)', cam_label, cam.get('channel', 0))
+        except Exception as e:
+            logging.error('Auto-enable ERROR: %s (ch %d): %s', cam_label, cam.get('channel', 0), e)
+
+        # Always add to watchdog: it will retry failed cameras on next cycle
+        watchdog_configs[camera_key] = cam_config
+
+    if watchdog_configs:
+        camera_commands.start_motion_watchdog(watchdog_configs)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan: auto-enable motion detection on startup, cleanup on shutdown."""
+    # Give a small delay for Uvicorn to be fully ready
+    asyncio.get_event_loop().create_task(_auto_enable_from_file())
+    yield
+    # Shutdown: stop watchdog
+    camera_commands.stop_motion_watchdog()
+    await camera_sessions.cleanup_all_sessions()
+
+
 app = FastAPI(
     title="Reolink API (reolink-aio)",
     description="API pour gérer les équipements Reolink via la bibliothèque reolink-aio",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Modèles de données
@@ -699,24 +764,23 @@ async def enable_camera_motion_detection(credentials: CameraCredentials):
     Active la détection de mouvement via Baichuan pour une caméra
     """
     try:
-        camera_key = f"{credentials.host}:{credentials.port}"
+        camera_key = f"{credentials.host}:{credentials.channel}"
         logging.info(f"Activation de la détection de mouvement pour {camera_key}")
         
-        # Préparer la configuration de la caméra
-        cameras_config = {
-            camera_key: {
-                'host': credentials.host,
-                'port': credentials.port,
-                'username': credentials.username,
-                'password': credentials.password,
-                'channel': credentials.channel
-            }
+        cam_config = {
+            'host': credentials.host,
+            'port': credentials.port,
+            'username': credentials.username,
+            'password': credentials.password,
+            'channel': credentials.channel
         }
         
-        # Activer la détection de mouvement
-        success = await camera_commands.enable_motion_detection(camera_key, cameras_config)
+        success = await camera_commands.enable_motion_detection(camera_key, cam_config)
         
         if success:
+            # Add to watchdog if it's running (auto mode)
+            if camera_commands.is_watchdog_running():
+                camera_commands.start_motion_watchdog({camera_key: cam_config})
             return MotionDetectionResponse(
                 success=True,
                 message="Détection de mouvement activée avec succès",
@@ -741,24 +805,21 @@ async def disable_camera_motion_detection(credentials: CameraCredentials):
     Désactive la détection de mouvement via Baichuan pour une caméra
     """
     try:
-        camera_key = f"{credentials.host}:{credentials.port}"
+        camera_key = f"{credentials.host}:{credentials.channel}"
         logging.info(f"Désactivation de la détection de mouvement pour {camera_key}")
         
-        # Préparer la configuration de la caméra
-        cameras_config = {
-            camera_key: {
-                'host': credentials.host,
-                'port': credentials.port,
-                'username': credentials.username,
-                'password': credentials.password,
-                'channel': credentials.channel
-            }
+        cam_config = {
+            'host': credentials.host,
+            'port': credentials.port,
+            'username': credentials.username,
+            'password': credentials.password,
+            'channel': credentials.channel
         }
         
-        # Désactiver la détection de mouvement
-        success = await camera_commands.disable_motion_detection(camera_key, cameras_config)
+        success = await camera_commands.disable_motion_detection(camera_key, cam_config)
         
         if success:
+            camera_commands.remove_watched_camera(camera_key)
             return MotionDetectionResponse(
                 success=True,
                 message="Détection de mouvement désactivée avec succès",
@@ -783,22 +844,18 @@ async def get_camera_motion_status(credentials: CameraCredentials):
     Vérifie si la détection de mouvement est activée pour une caméra
     """
     try:
-        camera_key = f"{credentials.host}:{credentials.port}"
+        camera_key = f"{credentials.host}:{credentials.channel}"
         logging.debug(f"Vérification du statut de détection pour {camera_key}")
         
-        # Préparer la configuration de la caméra
-        cameras_config = {
-            camera_key: {
-                'host': credentials.host,
-                'port': credentials.port,
-                'username': credentials.username,
-                'password': credentials.password,
-                'channel': credentials.channel
-            }
+        cam_config = {
+            'host': credentials.host,
+            'port': credentials.port,
+            'username': credentials.username,
+            'password': credentials.password,
+            'channel': credentials.channel
         }
         
-        # Vérifier si la détection est activée
-        enabled = await camera_commands.is_motion_detection_enabled(camera_key, cameras_config)
+        enabled = await camera_commands.is_motion_detection_enabled(camera_key, cam_config)
         
         logging.info(f"Statut de détection pour {camera_key}: {'activé' if enabled else 'désactivé'}")
         
@@ -1102,7 +1159,8 @@ async def health_check():
     return {
         "status": "healthy",
         "active_sessions": len(camera_sessions.camera_sessions),
-        "active_baichuan_cameras": active_baichuan
+        "active_baichuan_cameras": active_baichuan,
+        "watchdog": camera_commands.get_watchdog_status()
     }
 
 if __name__ == "__main__":

@@ -51,12 +51,23 @@ if (!isConnect()) {
     </div>
     <div class="form-group">
       <label class="col-md-4 control-label">{{Mode de détection de mouvement}}
-        <sup><i class="fas fa-question-circle tooltips" title="{{Protocole utilisé pour la détection de mouvement : ONVIF (standard) ou TCP/Baichuan (natif Reolink, peut être plus réactif)}}"></i></sup>
+        <sup><i class="fas fa-question-circle tooltips" title="{{Protocole utilisé pour la détection de mouvement : ONVIF (standard) ou TCP/Baichuan (natif Reolink, peut-être plus réactif)}}"></i></sup>
       </label>
       <div class="col-md-4">
         <select class="configKey form-control" data-l1key="detection_mode">
             <option value="onvif">ONVIF</option>
             <option value="baichuan">TCP/Baichuan</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group detection-activation-group">
+      <label class="col-md-4 control-label">{{Activation de la détection de mouvement}}
+        <sup><i class="fas fa-question-circle tooltips" title="{{Auto : le plugin active automatiquement la détection sur les caméras au démarrage du démon. Manuel : vous gérez l'activation vous-même avec les actions de chaque caméra.}}"></i></sup>
+      </label>
+      <div class="col-md-4">
+        <select class="configKey form-control" data-l1key="detection_activation">
+            <option value="auto">Auto</option>
+            <option value="manual">Manuel</option>
         </select>
       </div>
     </div>
