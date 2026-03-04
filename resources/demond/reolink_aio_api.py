@@ -41,6 +41,7 @@ async def _auto_enable_from_file():
     logging.info('Auto-enable motion detection on %d camera(s) from %s', len(cameras), MOTION_CAMERAS_FILE)
 
     watchdog_configs = {}
+    hosts_registered = set()  # Track hosts with channel status monitoring
     for cam in cameras:
         camera_key = f"{cam['host']}:{cam.get('channel', 0)}"
         cam_config = {
@@ -55,6 +56,12 @@ async def _auto_enable_from_file():
             success = await camera_commands.enable_motion_detection(camera_key, cam_config)
             if success:
                 logging.info('Auto-enable OK: %s (ch %d)', cam_label, cam.get('channel', 0))
+                # Register channel status monitoring once per host
+                session_key = f"{cam['host']}:{cam.get('port', 9000)}"
+                if session_key not in hosts_registered and session_key in camera_sessions.camera_sessions:
+                    host = camera_sessions.camera_sessions[session_key]['host']
+                    camera_commands.register_channel_status_monitoring(host)
+                    hosts_registered.add(session_key)
             else:
                 logging.warning('Auto-enable FAILED: %s (ch %d)', cam_label, cam.get('channel', 0))
         except Exception as e:

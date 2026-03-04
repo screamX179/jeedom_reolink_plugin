@@ -113,6 +113,27 @@ async def _execute_camera_command(camera_name, cameras, command_name, api_call):
         return False
 
 
+def register_channel_status_monitoring(host):
+    """Register callback to log channel status changes (cmd_id 145) for a host."""
+    callback_id = f'channel_status_{host.host}'
+    
+    async def delayed_log():
+        logging.debug('Received channel status event for %s, waiting for host data refresh...', host.host)
+        await host.get_host_data()  # refresh host data to get updated channel status
+        logging.info(
+            'Channel status event (cmd_id 145) for %s: %s',
+            host.host,
+            {ch: {'online': host.camera_online(ch)} for ch in host.channels}
+        )
+    
+    host.baichuan.register_callback(
+        callback_id=callback_id,
+        callback=lambda: asyncio.create_task(delayed_log()),
+        cmd_id=145
+    )
+    logging.info('Registered channel status monitoring (cmd_id 145) for %s', host.host)
+
+
 async def active_preset(camera_name, preset_id, cameras):
     """Activate a preset position on the camera."""
     return await _execute_camera_command(
