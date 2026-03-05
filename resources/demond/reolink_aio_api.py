@@ -59,8 +59,7 @@ async def _auto_enable_from_file():
                 # Register channel status monitoring once per host
                 session_key = f"{cam['host']}:{cam.get('port', 9000)}"
                 if session_key not in hosts_registered and session_key in camera_sessions.camera_sessions:
-                    host = camera_sessions.camera_sessions[session_key]['host']
-                    camera_commands.register_channel_status_monitoring(host)
+                    await camera_commands.register_channel_status_monitoring(session_key, cam_config)
                     hosts_registered.add(session_key)
             else:
                 logging.warning('Auto-enable FAILED: %s (ch %d)', cam_label, cam.get('channel', 0))

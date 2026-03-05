@@ -113,25 +113,52 @@ async def _execute_camera_command(camera_name, cameras, command_name, api_call):
         return False
 
 
-def register_channel_status_monitoring(host):
-    """Register callback to log channel status changes (cmd_id 145) for a host."""
-    callback_id = f'channel_status_{host.host}'
+async def register_channel_status_monitoring(session_key: str, cam_config: dict):
+    """Register callback to log channel status changes (cmd_id 145) for a host session.
     
-    async def delayed_log():
-        logging.debug('Received channel status event for %s, waiting for host data refresh...', host.host)
-        await host.get_host_data()  # refresh host data to get updated channel status
-        logging.info(
-            'Channel status event (cmd_id 145) for %s: %s',
-            host.host,
-            {ch: {'online': host.camera_online(ch)} for ch in host.channels}
-        )
+    Args:
+        session_key: Session cache key (host:port)
+        cam_config: Dict with host, port, username, password (used for refresh)
+    """
+    host = await camera_sessions.get_camera_session(
+        camera_key=session_key,
+        host=cam_config['host'],
+        username=cam_config['username'],
+        password=cam_config['password'],
+        port=cam_config.get('port', 9000),
+        refresh=False
+    )
+    
+    callback_id = f'channel_status_{session_key}'
+    
+    def _on_channel_status():
+        async def _refresh_and_log():
+            try:
+                current_host = await camera_sessions.get_camera_session(
+                    camera_key=session_key,
+                    host=cam_config['host'],
+                    username=cam_config['username'],
+                    password=cam_config['password'],
+                    port=cam_config.get('port', 9000),
+                    refresh=True
+                )
+                if current_host:
+                    logging.info(
+                        'Channel status event (cmd_id 145) for %s: %s',
+                        session_key,
+                        {ch: {'online': current_host.camera_online(ch)} for ch in current_host.channels}
+                    )
+            except Exception as e:
+                logging.error('Error refreshing host data after channel status event for %s: %s', session_key, e)
+        
+        asyncio.get_event_loop().create_task(_refresh_and_log())
     
     host.baichuan.register_callback(
         callback_id=callback_id,
-        callback=lambda: asyncio.create_task(delayed_log()),
+        callback=_on_channel_status,
         cmd_id=145
     )
-    logging.info('Registered channel status monitoring (cmd_id 145) for %s', host.host)
+    logging.info('Registered channel status monitoring (cmd_id 145) for %s', session_key)
 
 
 async def active_preset(camera_name, preset_id, cameras):
