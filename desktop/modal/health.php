@@ -110,34 +110,7 @@ try {
           </ul>
         </div>
 
-        <!-- Watchdog status -->
-        <?php if (isset($healthInfo['watchdog'])): ?>
-          <?php $watchdog = $healthInfo['watchdog']; ?>
-          <div class="panel panel-<?php echo $watchdog['running'] ? 'success' : 'default'; ?>">
-            <div class="panel-heading">
-              <h4 class="panel-title">
-                <i class="fas fa-shield-alt"></i> {{Watchdog détection de mouvement}}
-                <?php if ($watchdog['running']): ?>
-                  <span class="label label-success">{{Actif}}</span>
-                <?php else: ?>
-                  <span class="label label-default">{{Inactif}}</span>
-                <?php endif; ?>
-              </h4>
-            </div>
-            <?php if ($watchdog['running']): ?>
-            <div class="panel-body">
-              <ul>
-                <li><strong>{{Caméras surveillées}} :</strong> <span class="badge"><?php echo $watchdog['watched_cameras']; ?></span></li>
-                <li><strong>{{Intervalle de vérification}} :</strong> <?php echo $watchdog['interval_seconds']; ?>s</li>
-                <li><strong>{{Seuil d'inactivité}} :</strong> <?php echo $watchdog['stale_threshold_seconds']; ?>s (<?php echo intval($watchdog['stale_threshold_seconds'] / 60); ?> min)</li>
-              </ul>
-              <p class="text-muted" style="margin-top:5px;margin-bottom:0">
-                <i class="fas fa-info-circle"></i> {{Le watchdog vérifie la détection uniquement pour les caméras n'ayant pas remonté d'événement depuis le seuil d'inactivité.}}
-              </p>
-            </div>
-            <?php endif; ?>
-          </div>
-        <?php endif; ?>
+
       <?php endif; ?>
 
       <!-- Caméras Baichuan actives -->

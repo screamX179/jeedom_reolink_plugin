@@ -8,8 +8,6 @@ from pydantic import BaseModel
 from typing import List, Optional
 from contextlib import asynccontextmanager
 import asyncio
-import json
-import os
 import logging
 from reolink_aio.api import Host
 
@@ -17,70 +15,11 @@ from reolink_aio.api import Host
 import camera_sessions
 import camera_commands
 
-MOTION_CAMERAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'motion_cameras.json')
-
-
-async def _auto_enable_from_file():
-    """Read motion_cameras.json and auto-enable motion detection + start watchdog."""
-    if not os.path.isfile(MOTION_CAMERAS_FILE):
-        logging.info('No %s found – skipping auto-enable motion detection', MOTION_CAMERAS_FILE)
-        return
-
-    try:
-        with open(MOTION_CAMERAS_FILE, 'r') as f:
-            data = json.load(f)
-    except Exception as e:
-        logging.error('Failed to read %s: %s', MOTION_CAMERAS_FILE, e)
-        return
-
-    cameras = data.get('cameras', [])
-    if not cameras:
-        logging.info('motion_cameras.json is empty – nothing to auto-enable')
-        return
-
-    logging.info('Auto-enable motion detection on %d camera(s) from %s', len(cameras), MOTION_CAMERAS_FILE)
-
-    watchdog_configs = {}
-    hosts_registered = set()  # Track hosts with channel status monitoring
-    for cam in cameras:
-        camera_key = f"{cam['host']}:{cam.get('channel', 0)}"
-        cam_config = {
-            'host': cam['host'],
-            'port': cam.get('port', 9000),
-            'username': cam['username'],
-            'password': cam['password'],
-            'channel': cam.get('channel', 0)
-        }
-        cam_label = cam.get('name', camera_key)
-        try:
-            success = await camera_commands.enable_motion_detection(camera_key, cam_config)
-            if success:
-                logging.info('Auto-enable OK: %s (ch %d)', cam_label, cam.get('channel', 0))
-                # Register channel status monitoring once per host
-                session_key = f"{cam['host']}:{cam.get('port', 9000)}"
-                if session_key not in hosts_registered and session_key in camera_sessions.camera_sessions:
-                    await camera_commands.register_channel_status_monitoring(session_key, cam_config)
-                    hosts_registered.add(session_key)
-            else:
-                logging.warning('Auto-enable FAILED: %s (ch %d)', cam_label, cam.get('channel', 0))
-        except Exception as e:
-            logging.error('Auto-enable ERROR: %s (ch %d): %s', cam_label, cam.get('channel', 0), e)
-
-        # Always add to watchdog: it will retry failed cameras on next cycle
-        watchdog_configs[camera_key] = cam_config
-
-    if watchdog_configs:
-        camera_commands.start_motion_watchdog(watchdog_configs)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI lifespan: auto-enable motion detection on startup, cleanup on shutdown."""
-    # Give a small delay for Uvicorn to be fully ready
-    asyncio.get_event_loop().create_task(_auto_enable_from_file())
+    """FastAPI lifespan: cleanup on shutdown."""
     yield
-    # Shutdown: stop watchdog
-    camera_commands.stop_motion_watchdog()
     await camera_sessions.cleanup_all_sessions()
 
 
@@ -784,9 +723,6 @@ async def enable_camera_motion_detection(credentials: CameraCredentials):
         success = await camera_commands.enable_motion_detection(camera_key, cam_config)
         
         if success:
-            # Add to watchdog if it's running (auto mode)
-            if camera_commands.is_watchdog_running():
-                camera_commands.start_motion_watchdog({camera_key: cam_config})
             return MotionDetectionResponse(
                 success=True,
                 message="Détection de mouvement activée avec succès",
@@ -825,7 +761,6 @@ async def disable_camera_motion_detection(credentials: CameraCredentials):
         success = await camera_commands.disable_motion_detection(camera_key, cam_config)
         
         if success:
-            camera_commands.remove_watched_camera(camera_key)
             return MotionDetectionResponse(
                 success=True,
                 message="Détection de mouvement désactivée avec succès",
@@ -1166,7 +1101,64 @@ async def health_check():
         "status": "healthy",
         "active_sessions": len(camera_sessions.camera_sessions),
         "active_baichuan_cameras": active_baichuan,
-        "watchdog": camera_commands.get_watchdog_status()
+        "active_motion_cameras": len(active_baichuan)
+    }
+
+
+class AutoEnableCameraEntry(BaseModel):
+    """Une caméra à auto-activer"""
+    host: str
+    username: str
+    password: str
+    port: int = 9000
+    channel: int = 0
+    name: str = ""
+
+class AutoEnableRequest(BaseModel):
+    """Requête batch d'auto-activation"""
+    cameras: List[AutoEnableCameraEntry]
+
+@app.post("/reolink/motion/auto-enable-all")
+async def auto_enable_all(request: AutoEnableRequest):
+    """Active la détection de mouvement pour une liste de caméras en une seule requête.
+    Enregistre aussi le monitoring channel status (cmd_id 145) une fois par session host."""
+    results = []
+    hosts_registered = set()
+
+    for cam in request.cameras:
+        camera_key = f"{cam.host}:{cam.channel}"
+        cam_config = {
+            'host': cam.host,
+            'port': cam.port,
+            'username': cam.username,
+            'password': cam.password,
+            'channel': cam.channel
+        }
+        cam_label = cam.name or camera_key
+        try:
+            success = await camera_commands.enable_motion_detection(camera_key, cam_config)
+            if success:
+                camera_commands.register_auto_camera(camera_key, cam_config)
+                logging.info('Auto-enable OK: %s (ch %d)', cam_label, cam.channel)
+                # Register channel status monitoring once per host session
+                session_key = f"{cam.host}:{cam.port}"
+                if session_key not in hosts_registered and session_key in camera_sessions.camera_sessions:
+                    await camera_commands.register_channel_status_monitoring(session_key, cam_config)
+                    hosts_registered.add(session_key)
+            else:
+                logging.warning('Auto-enable FAILED: %s (ch %d)', cam_label, cam.channel)
+            results.append({'camera': cam_label, 'success': success})
+        except Exception as e:
+            logging.error('Auto-enable ERROR: %s (ch %d): %s', cam_label, cam.channel, e)
+            results.append({'camera': cam_label, 'success': False, 'error': str(e)})
+
+    enabled_count = sum(1 for r in results if r['success'])
+    logging.info('Auto-enable-all: %d/%d cameras enabled', enabled_count, len(results))
+
+    return {
+        'total': len(results),
+        'enabled': enabled_count,
+        'results': results
     }
 
 if __name__ == "__main__":

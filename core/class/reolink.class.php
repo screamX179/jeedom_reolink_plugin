@@ -1352,21 +1352,6 @@ class reolink extends eqLogic {
     $cmd .= ' --reolink_aio_log_level ' . config::byKey('reolink_aio_log_level', __CLASS__, 'warning');
     $cmd .= ' --reolink_aio_log_file ' . log::getPathToLog('reolink_aio');
 
-    // Écrire le fichier de config motion pour le daemon (avant le lancement)
-    $detection_mode = config::byKey('detection_mode', __CLASS__, 'onvif');
-    $detection_activation = config::byKey('detection_activation', __CLASS__, 'auto');
-    $motionConfigFile = $path . '/motion_cameras.json';
-    if ($detection_mode == 'baichuan' && $detection_activation == 'auto') {
-      $cameras = self::buildMotionCamerasList();
-      file_put_contents($motionConfigFile, json_encode(array('cameras' => $cameras)));
-      log::add(__CLASS__, 'info', 'Fichier motion_cameras.json écrit avec ' . count($cameras) . ' caméra(s)');
-    } else {
-      // Pas d'auto-enable : supprimer le fichier s'il existe
-      if (file_exists($motionConfigFile)) {
-        unlink($motionConfigFile);
-      }
-    }
-
     log::add(__CLASS__, 'info', 'Lancement démon');
     $result = exec($cmd . ' >> ' . log::getPathToLog('reolink_daemon') . ' 2>&1 &');
     $i = 0;
@@ -1384,15 +1369,73 @@ class reolink extends eqLogic {
     }
     message::removeAll(__CLASS__, 'unableStartDeamon');
 
+    // Actions post-démarrage : attendre que l'API soit prête
+    if (self::waitForApi()) {
+      // Auto-activation de la détection de mouvement (Baichuan + Auto)
+      $detection_mode = config::byKey('detection_mode', __CLASS__, 'onvif');
+      $detection_activation = config::byKey('detection_activation', __CLASS__, 'auto');
+      if ($detection_mode == 'baichuan' && $detection_activation == 'auto') {
+        self::autoEnableMotionDetection();
+      }
+
+      // Rafraîchir le statut de toutes les caméras
+      self::refreshAllCamerasStatus();
+    }
+
     return true;
   }
 
+  public static function deamon_stop() {
+    $pid_file = jeedom::getTmpFolder(__CLASS__) . '/deamon.pid';
+    if (file_exists($pid_file)) {
+      $pid = intval(trim(file_get_contents($pid_file)));
+      system::kill($pid);
+    }
+    system::kill('reolinkd.py');
+    sleep(1);
+  }
+
   /**
-   * Construit la liste des caméras pour l'auto-activation de la détection de mouvement
-   * @return array Liste des configurations caméra
+   * Attend que l'API reolink-aio soit prête (répond au /health)
+   * @param int $maxWait Temps max d'attente en secondes
+   * @return bool True si l'API est prête
    */
-  private static function buildMotionCamerasList() {
-    $eqLogics = eqLogic::byType('reolink', true); // uniquement les actifs
+  private static function waitForApi($maxWait = 45) {
+    $apiPort = config::byKey('reolink_aio_api_port', __CLASS__, '44011');
+    $url = 'http://127.0.0.1:' . $apiPort . '/health';
+    
+    for ($i = 0; $i < $maxWait; $i++) {
+      $ch = curl_init($url);
+      curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+      curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+      curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
+      $response = curl_exec($ch);
+      $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+      $curlError = curl_error($ch);
+      curl_close($ch);
+
+      $logResponse = is_string($response) ? substr(str_replace(array("\r", "\n"), '', $response), 0, 200) : 'null';
+      log::add(__CLASS__, 'debug', 'waitForApi check url=' . $url . ' http=' . $httpCode . ' response=' . $logResponse . ($curlError ? ' curl_error=' . $curlError : ''));
+      
+      if ($httpCode == 200) {
+        log::add(__CLASS__, 'info', 'API reolink-aio prête après ' . ($i + 1) . 's');
+        return true;
+      }
+      
+      sleep(1);
+    }
+    
+    log::add(__CLASS__, 'warning', 'API reolink-aio non prête après ' . $maxWait . 's');
+    return false;
+  }
+
+  /**
+   * Auto-active la détection de mouvement pour toutes les caméras éligibles
+   * Envoie la liste en une seule requête batch (l'API doit être prête)
+   */
+  private static function autoEnableMotionDetection() {
+    // Construire la liste des caméras éligibles
+    $eqLogics = eqLogic::byType('reolink', true);
     $cameras = array();
     
     foreach ($eqLogics as $eqLogic) {
@@ -1406,7 +1449,7 @@ class reolink extends eqLogic {
       if (!empty($parentHubId)) {
         $credSource = reolink::byId($parentHubId, 'reolink');
         if (!is_object($credSource)) {
-          log::add(__CLASS__, 'warning', 'buildMotionCamerasList: HomeHub parent introuvable pour ' . $eqLogic->getName());
+          log::add(__CLASS__, 'warning', 'Auto-enable: HomeHub parent introuvable pour ' . $eqLogic->getName());
           continue;
         }
       } else {
@@ -1422,18 +1465,56 @@ class reolink extends eqLogic {
         'name' => $eqLogic->getName()
       );
     }
+
+    if (empty($cameras)) {
+      log::add(__CLASS__, 'info', 'Auto-enable détection: aucune caméra éligible');
+      return;
+    }
+
+    log::add(__CLASS__, 'info', 'Auto-enable détection: activation pour ' . count($cameras) . ' caméra(s)');
+
+    $apiPort = config::byKey('reolink_aio_api_port', __CLASS__, '44011');
+    $url = 'http://127.0.0.1:' . $apiPort . '/reolink/motion/auto-enable-all';
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(array('cameras' => $cameras)));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
     
-    return $cameras;
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($httpCode == 200 && $response) {
+      $result = json_decode($response, true);
+      if ($result) {
+        log::add(__CLASS__, 'info', 'Auto-enable détection: ' . $result['enabled'] . '/' . $result['total'] . ' caméra(s) activée(s)');
+      }
+    } else {
+      $errorMsg = 'Auto-enable détection: erreur HTTP ' . $httpCode;
+      if ($curlError) {
+        $errorMsg .= ' - ' . $curlError;
+      }
+      log::add(__CLASS__, 'error', $errorMsg);
+    }
   }
 
-  public static function deamon_stop() {
-    $pid_file = jeedom::getTmpFolder(__CLASS__) . '/deamon.pid';
-    if (file_exists($pid_file)) {
-      $pid = intval(trim(file_get_contents($pid_file)));
-      system::kill($pid);
+  /**
+   * Rafraîchit le statut de toutes les caméras au démarrage du démon
+   */
+  private static function refreshAllCamerasStatus() {
+    $eqLogics = eqLogic::byType('reolink', true);
+    log::add(__CLASS__, 'info', 'Refresh statut de ' . count($eqLogics) . ' équipement(s) au démarrage du démon');
+    foreach ($eqLogics as $eqLogic) {
+      try {
+        self::refreshNFO($eqLogic->getId());
+      } catch (Exception $e) {
+        log::add(__CLASS__, 'warning', 'Erreur refresh au démarrage pour ' . $eqLogic->getName() . ': ' . $e->getMessage());
+      }
     }
-    system::kill('reolinkd.py');
-    sleep(1);
   }
 
   public static function sendToDaemon($params) {

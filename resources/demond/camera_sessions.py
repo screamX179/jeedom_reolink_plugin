@@ -33,6 +33,13 @@ _locks_mutex = asyncio.Lock()
 _refresh_events: dict[str, asyncio.Event] = {}
 _refresh_results: dict[str, Host] = {}
 
+# Callbacks invoked when a session is created or recreated
+_session_created_callbacks: list = []
+
+def register_session_created_callback(callback):
+    """Register an async callback(session_key) invoked when a session is created/recreated."""
+    _session_created_callbacks.append(callback)
+
 async def _get_camera_lock(camera_key):
     """Get or create the lock for a specific camera key."""
     async with _locks_mutex:
@@ -58,6 +65,10 @@ async def _create_and_cache_session(camera_key, host, username, password, port=9
             await oldest_data['host'].logout()
         except Exception:
             pass
+
+    # Notify listeners of session creation/recreation (async, outside lock)
+    for cb in _session_created_callbacks:
+        asyncio.get_event_loop().create_task(cb(camera_key))
 
     return api
 

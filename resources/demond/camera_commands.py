@@ -19,27 +19,9 @@ import logging
 import asyncio
 import traceback
 import sys
-import time
-from typing import Dict, Optional
+from typing import Dict
 
 import camera_sessions
-
-# --- Motion detection watchdog state ---
-# Stores the desired state: cameras that should have motion detection active.
-# Key = camera_key (host:channel), Value = full cameras_config entry (dict)
-_watched_cameras: Dict[str, dict] = {}
-_watchdog_task: Optional[asyncio.Task] = None
-WATCHDOG_INTERVAL_SECONDS = 60
-WATCHDOG_STALE_THRESHOLD_SECONDS = 300  # 5 min sans event = suspect
-
-# Track last event received per camera (passive health signal)
-_last_event_time: Dict[str, float] = {}
-
-
-def record_camera_event(camera_key: str):
-    """Record that a Baichuan push event was received for this camera.
-    Called from motion_callback to signal the watchdog that the camera is alive."""
-    _last_event_time[camera_key] = time.time()
 
 # Initialize jeedom_com (same as camhook.py)
 try:
@@ -65,6 +47,55 @@ if _callback and _apikey:
 else:
     logging.error('jeedom_cnx not initialized in camera_commands (no credentials)')
     sys.exit(1)
+
+
+# ── Auto-camera registry: cameras to re-enable on session recreation ──────
+_auto_cameras: Dict[str, dict] = {}  # camera_key (host:channel) -> cam_config
+
+
+def register_auto_camera(camera_key: str, cam_config: dict):
+    """Register a camera for automatic motion re-enable on session recreation."""
+    _auto_cameras[camera_key] = cam_config.copy()
+    logging.debug('Auto-camera registered: %s', camera_key)
+
+
+def unregister_auto_camera(camera_key: str):
+    """Unregister a camera from automatic motion re-enable."""
+    if _auto_cameras.pop(camera_key, None):
+        logging.debug('Auto-camera unregistered: %s', camera_key)
+
+
+async def _on_session_created(session_key: str):
+    """Callback: re-enable motion detection for auto-cameras when session is (re)created."""
+    cameras_to_reenable = [
+        (ck, cc) for ck, cc in _auto_cameras.items()
+        if f"{cc['host']}:{cc.get('port', 9000)}" == session_key
+    ]
+    if not cameras_to_reenable:
+        return
+
+    logging.info('Session %s (re)created: re-enabling motion for %d camera(s)',
+                 session_key, len(cameras_to_reenable))
+
+    for camera_key, cam_config in cameras_to_reenable:
+        try:
+            await enable_motion_detection(camera_key, cam_config)
+        except Exception as e:
+            logging.error('Re-enable motion failed for %s: %s', camera_key, e)
+
+    # Re-register channel status monitoring once for this session
+    first_cam_config = cameras_to_reenable[0][1]
+    try:
+        await register_channel_status_monitoring(session_key, first_cam_config)
+    except Exception as e:
+        logging.error('Re-register channel monitoring failed for %s: %s', session_key, e)
+
+
+# Register session callback at module init
+camera_sessions.register_session_created_callback(_on_session_created)
+
+# ── Debounce for channel status events (cmd_id 145) ──────────────────────────
+_channel_status_debounce: Dict[str, asyncio.Task] = {}
 
 
 async def _execute_camera_command(camera_name, cameras, command_name, api_call):
@@ -132,7 +163,8 @@ async def register_channel_status_monitoring(session_key: str, cam_config: dict)
     callback_id = f'channel_status_{session_key}'
     
     def _on_channel_status():
-        async def _refresh_and_log():
+        async def _debounced_refresh():
+            await asyncio.sleep(2)  # Attendre que tous les événements arrivent
             try:
                 current_host = await camera_sessions.get_camera_session(
                     camera_key=session_key,
@@ -150,8 +182,15 @@ async def register_channel_status_monitoring(session_key: str, cam_config: dict)
                     )
             except Exception as e:
                 logging.error('Error refreshing host data after channel status event for %s: %s', session_key, e)
+            finally:
+                _channel_status_debounce.pop(session_key, None)
         
-        asyncio.get_event_loop().create_task(_refresh_and_log())
+        # Annuler le debounce précédent et en relancer un nouveau
+        existing = _channel_status_debounce.get(session_key)
+        if existing and not existing.done():
+            existing.cancel()
+            logging.debug('Channel status debounce reset for %s (new event received)', session_key)
+        _channel_status_debounce[session_key] = asyncio.get_event_loop().create_task(_debounced_refresh())
     
     host.baichuan.register_callback(
         callback_id=callback_id,
@@ -209,9 +248,6 @@ async def enable_motion_detection(camera_key: str, cam_config: dict):
         # Create callback for motion events
         def motion_callback():
             logging.debug('Motion event callback id=%s for %s (channel %d)', callback_id, camera_key, channel)
-            
-            # Signal the watchdog that this camera is alive
-            record_camera_event(camera_key)
             
             try:
                 # Basic motion detection - send in same format as ONVIF webhook
@@ -314,6 +350,7 @@ async def disable_motion_detection(camera_key: str, cam_config: dict):
         # Unregister callback
         callback_id = f'{camera_key}_ch{channel}_motion'
         camera_api.baichuan.unregister_callback(callback_id)
+        unregister_auto_camera(camera_key)
         
         logging.debug('After unregister_callback: _ext_callback=%s', camera_api.baichuan._ext_callback)
         
@@ -415,108 +452,3 @@ async def active_siren(camera_name, duration, cameras):
             lambda api, ch: api.set_siren(ch, True)
         )
 
-
-# =====================================================================
-# Motion detection watchdog
-# =====================================================================
-
-async def _watchdog_loop():
-    """Passive watchdog: only actively checks cameras that appear stale (no event received recently)."""
-    logging.info('Motion detection watchdog started (interval=%ds, stale_threshold=%ds, cameras=%d)',
-                 WATCHDOG_INTERVAL_SECONDS, WATCHDOG_STALE_THRESHOLD_SECONDS, len(_watched_cameras))
-    while True:
-        await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
-        if not _watched_cameras:
-            continue
-        try:
-            for camera_key, cam_config in list(_watched_cameras.items()):
-                now = time.time()
-                last_event = _last_event_time.get(camera_key)
-
-                # If we received an event recently, the detection is working — skip
-                if last_event and (now - last_event) < WATCHDOG_STALE_THRESHOLD_SECONDS:
-                    logging.debug('Watchdog: %s OK (last event %ds ago)', camera_key, int(now - last_event))
-                    continue
-
-                # Stale or never received an event — do an active check
-                stale_info = f"{int(now - last_event)}s ago" if last_event else "never"
-                logging.info('Watchdog: %s stale (last event: %s), checking...', camera_key, stale_info)
-
-                try:
-                    enabled = await is_motion_detection_enabled(camera_key, cam_config)
-                    if not enabled:
-                        logging.warning('Watchdog: motion detection lost on %s – re-enabling', camera_key)
-                        success = await enable_motion_detection(camera_key, cam_config)
-                        if success:
-                            logging.info('Watchdog: motion detection re-enabled on %s', camera_key)
-                            record_camera_event(camera_key)  # reset timer
-                        else:
-                            logging.error('Watchdog: failed to re-enable motion detection on %s', camera_key)
-                    else:
-                        logging.debug('Watchdog: %s detection still active (stale but OK)', camera_key)
-                        record_camera_event(camera_key)  # reset timer
-                except Exception as e:
-                    logging.error('Watchdog: error checking/re-enabling %s: %s', camera_key, e)
-                    logging.debug(traceback.format_exc())
-        except Exception as e:
-            logging.error('Watchdog loop error: %s', e)
-            logging.debug(traceback.format_exc())
-
-
-def start_motion_watchdog(cameras_configs: Dict[str, dict]):
-    """Start (or update) the motion detection watchdog with the given cameras.
-
-    Args:
-        cameras_configs: dict keyed by camera_key with cam config dicts
-                         (host, port, username, password, channel)
-    """
-    global _watchdog_task
-
-    # Merge new cameras into the watched set (additive)
-    _watched_cameras.update(cameras_configs)
-    logging.info('Watchdog: now watching %d cameras', len(_watched_cameras))
-
-    # Start the background task if not already running
-    if _watchdog_task is None or _watchdog_task.done():
-        _watchdog_task = asyncio.get_event_loop().create_task(_watchdog_loop())
-        logging.info('Watchdog background task started')
-
-
-def stop_motion_watchdog():
-    """Stop the watchdog and clear the watched cameras list."""
-    global _watchdog_task
-
-    _watched_cameras.clear()
-    _last_event_time.clear()
-    if _watchdog_task is not None and not _watchdog_task.done():
-        _watchdog_task.cancel()
-        logging.info('Watchdog background task cancelled')
-    _watchdog_task = None
-
-
-def remove_watched_camera(camera_key: str):
-    """Remove a single camera from the watchdog.
-
-    If no cameras remain, the watchdog task keeps running but does nothing
-    until new cameras are added.
-    """
-    removed = _watched_cameras.pop(camera_key, None)
-    _last_event_time.pop(camera_key, None)
-    if removed:
-        logging.info('Watchdog: stopped watching %s (%d remaining)', camera_key, len(_watched_cameras))
-    return removed is not None
-
-
-def is_watchdog_running() -> bool:
-    """Check if the watchdog background task is running."""
-    return _watchdog_task is not None and not _watchdog_task.done()
-
-
-def get_watchdog_status() -> dict:
-    """Return watchdog status info for health/diagnostics."""
-    return {
-        'running': is_watchdog_running(),
-        'watched_cameras': len(_watched_cameras),
-        'interval_seconds': WATCHDOG_INTERVAL_SECONDS,
-        'stale_threshold_seconds': WATCHDOG_STALE_THRESHOLD_SECONDS,
-    }
