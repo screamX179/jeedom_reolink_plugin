@@ -204,7 +204,7 @@ class reolink extends eqLogic {
       if ($response) {
         $errorMsg .= ' - Réponse: ' . substr($response, 0, 200);
       }
-      log::add('reolink', 'error', $errorMsg);
+      log::add('reolink', 'warning', $errorMsg);
       return false;
     }
     
@@ -912,7 +912,9 @@ class reolink extends eqLogic {
       $cmd_results = reolink::callReolinkAioAPI($endpoint, $config['credentials'], 'POST');
       
       if (!$cmd_results || !is_array($cmd_results)) {
-        log::add('reolink', 'error', 'Impossible de récupérer les informations de configuration de la caméra');
+        $cameraIp = isset($config['credentials']['host']) ? $config['credentials']['host'] : 'unknown';
+        $cameraChannel = isset($config['channel_id']) ? $config['channel_id'] : 'unknown';
+        log::add('reolink', 'error', 'Impossible de récupérer les informations de configuration de la caméra (ip=' . $cameraIp . ', channel=' . $cameraChannel . ')');
         return false;
       }
       
