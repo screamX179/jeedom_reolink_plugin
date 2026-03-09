@@ -238,63 +238,26 @@ async def enable_motion_detection(camera_key: str, cam_config: dict):
             logging.debug('Motion event callback id=%s for %s (channel %d)', callback_id, camera_key, channel)
             
             try:
-                # Basic motion detection - send in same format as ONVIF webhook
-                motion_value = 1 if camera_api.motion_detected(channel) else 0
+                # Collecter tous les états de détection en un seul envoi
+                events = {
+                    'EvMotion': 1 if camera_api.motion_detected(channel) else 0,
+                    'EvVisitor': 1 if camera_api.visitor_detected(channel) else 0,
+                }
+                
+                if camera_api.ai_supported(channel):
+                    events['EvPeopleDetect'] = 1 if camera_api.ai_detected(channel, 'people') else 0
+                    events['EvVehicleDetect'] = 1 if camera_api.ai_detected(channel, 'vehicle') else 0
+                    events['EvDogCatDetect'] = 1 if camera_api.ai_detected(channel, 'pet') else 0
+                
                 event_data = {
-                    'message': 'EvMotion',
+                    'message': 'baichuan_events',
                     'ip': camera_ip,
                     'channel': channel,
-                    'motionstate': motion_value
+                    'events': events
                 }
                 jeedom_cnx.send_change_immediate(event_data)
-                logging.debug('Motion event sent for %s channel %d (state=%s)', camera_key, channel, motion_value)
+                logging.debug('Motion events sent for %s channel %d: %s', camera_key, channel, events)
                 
-                # Visitor detection (doorbell)
-                visitor_value = 1 if camera_api.visitor_detected(channel) else 0
-                visitor_event = {
-                    'message': 'EvVisitor',
-                    'ip': camera_ip,
-                    'channel': channel,
-                    'motionstate': visitor_value
-                }
-                jeedom_cnx.send_change_immediate(visitor_event)
-                logging.debug('Visitor detection event sent: %s', visitor_value)
-                
-                # AI detections - send as separate ONVIF-style events if supported
-                if camera_api.ai_supported(channel):
-                    # People detection
-                    people_value = 1 if camera_api.ai_detected(channel, 'people') else 0
-                    people_event = {
-                        'message': 'EvPeopleDetect',
-                        'ip': camera_ip,
-                        'channel': channel,
-                        'motionstate': people_value
-                    }
-                    jeedom_cnx.send_change_immediate(people_event)
-                    logging.debug('People detection event sent: %s', people_value)
-                    
-                    # Vehicle detection
-                    vehicle_value = 1 if camera_api.ai_detected(channel, 'vehicle') else 0
-                    vehicle_event = {
-                        'message': 'EvVehicleDetect',
-                        'ip': camera_ip,
-                        'channel': channel,
-                        'motionstate': vehicle_value
-                    }
-                    jeedom_cnx.send_change_immediate(vehicle_event)
-                    logging.debug('Vehicle detection event sent: %s', vehicle_value)
-                    
-                    # Pet (dog/cat) detection
-                    pet_value = 1 if camera_api.ai_detected(channel, 'pet') else 0
-                    pet_event = {
-                        'message': 'EvDogCatDetect',
-                        'ip': camera_ip,
-                        'channel': channel,
-                        'motionstate': pet_value
-                    }
-                    jeedom_cnx.send_change_immediate(pet_event)
-                    logging.debug('Pet detection event sent: %s', pet_value)
-                    
             except Exception as e:
                 logging.error('Failed to send motion events: %s', e)
                 logging.debug(traceback.format_exc())

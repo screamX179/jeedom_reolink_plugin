@@ -16,23 +16,20 @@ try {
         die();
     }
 
-# BEGIN  modified by t0urista to handle ONVIF events
-    if (isset($result['message']) && (($result['message']=="motion") || (strpos($result['message'], 'Ev') !== false) )) {
-# END  modified by t0urista to handle ONVIF events
-
+    if (isset($result['message']) && $result['message'] == 'baichuan_events') {
+        // ── Mode Baichuan : événements batch (un seul appel avec tous les états) ──
         $plugin = plugin::byId('reolink');
         $eqLogics = eqLogic::byType($plugin->getId());
-        $detection_mode = config::byKey('detection_mode', 'reolink', 'onvif');
+        $events = $result['events'];
+        $eventChannel = isset($result['channel']) ? intval($result['channel']) : null;
 
         foreach ($eqLogics as $eqLogic) {
-            // Les HomeHub/NVR ne reçoivent pas d'événements motion, on les ignore
             if ($eqLogic->getConfiguration('isNVR') === 'Oui') {
               continue;
             }
 
             $camera_contact_point = $eqLogic->getConfiguration('adresseip');
-            $camera_AI = $eqLogic->getConfiguration('supportai');
-            $camera_channel = intval($eqLogic->getConfiguration('defined_channel', 0)); // Channel 0-indexed
+            $camera_channel = intval($eqLogic->getConfiguration('defined_channel', 0));
 
             if (filter_var($camera_contact_point, FILTER_VALIDATE_IP)) {
               $camera_ip = $camera_contact_point;
@@ -40,55 +37,66 @@ try {
               $camera_ip = gethostbyname($camera_contact_point);
             }
 
-            // Comparer IP ET channel pour identifier la bonne caméra
-            // En mode Baichuan : IP du NVR/HomeHub + channel spécifique
-            // En mode ONVIF : IP de la caméra individuelle (pas de channel car webhook vient de la caméra directement)
             $ip_match = ($camera_ip == $result['ip']);
-            $channel_match = !isset($result['channel']) || ($camera_channel == $result['channel']);
-            
+            $channel_match = ($eventChannel === null) || ($camera_channel == $eventChannel);
+
             if ($ip_match && $channel_match) {
-              if ($result['message'] == "motion") {
-                log::add('reolink', 'debug',  'Cam IP='.$result['ip'].' Ch='.$camera_channel.' ' . $detection_mode . ' event reçu depuis le daemon. name= MDstate, état='.$result['motionstate']);
+              // Mettre à jour chaque commande d'événement
+              $mdState = 0;
+              foreach ($events as $evName => $evState) {
+                $eqLogic->checkAndUpdateCmd($evName, $evState);
+                if ($evState == 1) {
+                  $mdState = 1;
+                }
+              }
+              // MdState = 1 si au moins un événement est actif
+              $eqLogic->checkAndUpdateCmd('MdState', $mdState);
+
+              log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' Baichuan batch: ' . json_encode($events) . ' => MdState=' . $mdState);
+            }
+        }
+
+    } elseif (isset($result['message']) && (($result['message'] == 'motion') || (strpos($result['message'], 'Ev') !== false))) {
+        // ── Mode ONVIF : événements individuels ──
+        $plugin = plugin::byId('reolink');
+        $eqLogics = eqLogic::byType($plugin->getId());
+
+        foreach ($eqLogics as $eqLogic) {
+            if ($eqLogic->getConfiguration('isNVR') === 'Oui') {
+              continue;
+            }
+
+            $camera_contact_point = $eqLogic->getConfiguration('adresseip');
+            $camera_AI = $eqLogic->getConfiguration('supportai');
+            $camera_channel = intval($eqLogic->getConfiguration('defined_channel', 0));
+
+            if (filter_var($camera_contact_point, FILTER_VALIDATE_IP)) {
+              $camera_ip = $camera_contact_point;
+            } else {
+              $camera_ip = gethostbyname($camera_contact_point);
+            }
+
+            $ip_match = ($camera_ip == $result['ip']);
+            $channel_match = !isset($result['channel']) || ($camera_channel == intval($result['channel']));
+
+            if ($ip_match && $channel_match) {
+              if ($result['message'] == 'motion') {
+                log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' ONVIF motion event, état='.$result['motionstate']);
                 $eqLogic->checkAndUpdateCmd('MdState', $result['motionstate']);
-              } 
-              
-# BEGIN  added by t0urista to handle ONVIF events
+              }
 
-# catch any ONVIF events in the 3 genreic ONVIF commands, can cover unknown ONVIF events
-              $eqLogic->checkAndUpdateCmd('EvLastOnvifName', $result['message']); 
-              $eqLogic->checkAndUpdateCmd('EvLastOnvifState', $result['motionstate']); 
-              $eqLogic->checkAndUpdateCmd('EvLastOnvifFull', $result['message'] . '-' . $result['motionstate']); 
-
-# catch all pre-defined ONVIF  events with their dedicated commands, does only cover knwon ONVIF events
+              // Commandes ONVIF génériques
+              $eqLogic->checkAndUpdateCmd('EvLastOnvifName', $result['message']);
+              $eqLogic->checkAndUpdateCmd('EvLastOnvifState', $result['motionstate']);
+              $eqLogic->checkAndUpdateCmd('EvLastOnvifFull', $result['message'] . '-' . $result['motionstate']);
 
               if (strpos($result['message'], 'Ev') !== false) {
-                 log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' ' . $detection_mode . ' event reçu depuis le daemon. name= ' . $result['message'] . ', etat='.$result['motionstate']);
-                 $eqLogic->checkAndUpdateCmd($result['message'], $result['motionstate']); 
-                 
-                 // En mode Baichuan, mettre à jour MdState : 1 si au moins un Ev* est à 1, sinon 0
-                 if ($detection_mode == 'baichuan') {
-                   $evCommands = ['EvMotion', 'EvFaceDetect', 'EvPeopleDetect', 'EvVehicleDetect', 'EvDogCatDetect', 'EvMotionAlarm', 'EvVisitor', 'EvPetDetect'];
-                   $mdState = 0;
-                   foreach ($evCommands as $cmdName) {
-                     $cmd = $eqLogic->getCmd('info', $cmdName);
-                     $cmdState = is_object($cmd) ? $cmd->execCmd() : 'N/A';
-                     log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' Cmd '.$cmdName.' = '.$cmdState);
-                     if (is_object($cmd) && $cmdState == 1) {
-                       $mdState = 1;
-                       break;
-                     }
-                   }
-                   log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' Mode Baichuan : MdState calculé = ' . $mdState);
-                   $eqLogic->checkAndUpdateCmd('MdState', $mdState);
-                 }
+                log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' ONVIF Ev event: ' . $result['message'] . '='.$result['motionstate']);
+                $eqLogic->checkAndUpdateCmd($result['message'], $result['motionstate']);
               }
-# END  added by t0urista to handle ONVIF events
 
-              #log::add('reolink', 'debug', 'IP : ' . $camera_contact_point . ' / IsCamAI : ' . $camera_AI . ' / EqId : ' . $EqId . ' / Channel : ' . $channel);
-              
-              // En mode Baichuan, les événements AI sont déjà envoyés par le callback Python
-              // En mode ONVIF, il faut interroger l'API pour récupérer les états AI
-              if ($camera_AI == "Oui" && $detection_mode == 'onvif') {
+              // ONVIF : interroger l'API pour les états AI
+              if ($camera_AI == 'Oui') {
                   $camcnx = reolink::getReolinkConnection($eqLogic->getId());
                   $channel = $eqLogic->getConfiguration('channelNum') - 1;
                   $res = $camcnx->SendCMD('[{"cmd":"GetAiState","action":0,"param":{"channel":'.$channel.'}}]');
@@ -96,12 +104,13 @@ try {
                     $eqLogic->checkAndUpdateCmd('EvPeopleDetect', $res[0]['value']['people']['alarm_state']);
                     $eqLogic->checkAndUpdateCmd('EvVehicleDetect', $res[0]['value']['vehicle']['alarm_state']);
                     $eqLogic->checkAndUpdateCmd('EvDogCatDetect', $res[0]['value']['dog_cat']['alarm_state']);
+                    log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' AI (ONVIF): People=' . $res[0]['value']['people']['alarm_state'] . ' Vehicle=' . $res[0]['value']['vehicle']['alarm_state'] . ' Pet=' . $res[0]['value']['dog_cat']['alarm_state']);
                   }
-                  log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' AI (ONVIF mode) : Evènements Motion | Personne : ' . $res[0]['value']['people']['alarm_state'] . ' / Vehicule : ' . $res[0]['value']['vehicle']['alarm_state'] . ' / Chien/Chat : ' . $res[0]['value']['dog_cat']['alarm_state']);
               }
             }
-          }
-    } elseif (isset($result['message']) && $result['message'] == "subscription") {
+        }
+
+    } elseif (isset($result['message']) && $result['message'] == 'subscription') {
         if ($result['state'] == 0) {
           $title = 'Plugin Reolink';
           $message = 'Notification de détection de mouvement indisponible sur la caméra : ' . $result['ip'] . ' ( Détails : ' . $result['details'] . ')';
