@@ -94,9 +94,6 @@ async def _on_session_created(session_key: str):
 # Register session callback at module init
 camera_sessions.register_session_created_callback(_on_session_created)
 
-# ── Debounce for channel status events (cmd_id 145) ──────────────────────────
-_channel_status_debounce: Dict[str, asyncio.Task] = {}
-
 
 async def _execute_camera_command(camera_name, cameras, command_name, api_call):
     """Generic helper to execute camera commands with standard error handling.
@@ -147,50 +144,41 @@ async def _execute_camera_command(camera_name, cameras, command_name, api_call):
 async def register_channel_status_monitoring(session_key: str, cam_config: dict):
     """Register callback to log channel status changes (cmd_id 145) for a host session.
     
+    Le callback lit directement l'état interne du Host (mis à jour par reolink_aio
+    avant le fire du callback) sans faire de refresh/recreation de session.
+    
     Args:
         session_key: Session cache key (host:port)
-        cam_config: Dict with host, port, username, password (used for refresh)
+        cam_config: Dict with host, port, username, password
     """
-    host = await camera_sessions.get_camera_session(
-        camera_key=session_key,
-        host=cam_config['host'],
-        username=cam_config['username'],
-        password=cam_config['password'],
-        port=cam_config.get('port', 9000),
-        refresh=False
-    )
+    session_data = camera_sessions.camera_sessions.get(session_key)
+    if not session_data:
+        logging.warning('Cannot register channel status monitoring: session %s not found', session_key)
+        return
     
+    host = session_data['host']
     callback_id = f'channel_status_{session_key}'
     
     def _on_channel_status():
-        async def _debounced_refresh():
-            await asyncio.sleep(2)  # Attendre que tous les événements arrivent
-            try:
-                current_host = await camera_sessions.get_camera_session(
-                    camera_key=session_key,
-                    host=cam_config['host'],
-                    username=cam_config['username'],
-                    password=cam_config['password'],
-                    port=cam_config.get('port', 9000),
-                    refresh=True
-                )
-                if current_host:
-                    logging.info(
-                        'Channel status event (cmd_id 145) for %s: %s',
-                        session_key,
-                        {ch: {'online': current_host.camera_online(ch)} for ch in current_host.channels}
-                    )
-            except Exception as e:
-                logging.error('Error refreshing host data after channel status event for %s: %s', session_key, e)
-            finally:
-                _channel_status_debounce.pop(session_key, None)
+        """Callback synchrone déclenché par reolink_aio sur event cmd_id 145.
         
-        # Annuler le debounce précédent et en relancer un nouveau
-        existing = _channel_status_debounce.get(session_key)
-        if existing and not existing.done():
-            existing.cancel()
-            logging.debug('Channel status debounce reset for %s (new event received)', session_key)
-        _channel_status_debounce[session_key] = asyncio.get_event_loop().create_task(_debounced_refresh())
+        Le push 145 met à jour _sleep (sleeping/standby) mais PAS _channel_online.
+        On lance un get_host_data() sur le Host existant pour rafraîchir _channel_online
+        (GetChannelStatus) sans recréer la session (ce qui causerait une boucle infinie).
+        """
+        async def _refresh_channel_status():
+            try:
+                logging.debug('Refreshing channel status for %s', session_key)
+                await host.get_host_data()
+                status = {
+                    ch: {'online': host.camera_online(ch), 'sleeping': host.sleeping(ch)}
+                    for ch in host.channels
+                }
+                logging.info('Channel status event (cmd_id 145) for %s: %s', session_key, status)
+            except Exception as e:
+                logging.error('Error refreshing channel status for %s: %s', session_key, e)
+        
+        asyncio.get_event_loop().create_task(_refresh_channel_status())
     
     host.baichuan.register_callback(
         callback_id=callback_id,
