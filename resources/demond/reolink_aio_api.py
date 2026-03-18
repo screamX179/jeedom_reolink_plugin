@@ -632,11 +632,14 @@ async def get_scenes(credentials: HomeHubCredentials):
         # Récupérer les scènes depuis baichuan._scenes
         scenes = host.baichuan._scenes
         
+        # Récupérer la scène active via la commande Baichuan (cmd 601)
+        active_scene_id = await host.baichuan.get_scene()
+        
         # Format de retour : dict avec scene_id: scene_name
-        logging.info(f"Scènes récupérées: {scenes}")
+        logging.info(f"Scènes récupérées: {scenes}, scène active: {active_scene_id}")
         return {
             "scenes": scenes,
-            "active_scene_id": host.baichuan.active_scene_id,
+            "active_scene_id": active_scene_id,
             "active_scene_name": host.baichuan.active_scene
         }
         

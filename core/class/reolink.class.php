@@ -575,9 +575,6 @@ class reolink extends eqLogic {
     }
   }
 
-  /**
-   * Récupère la liste des scènes depuis le HomeHub et met à jour la commande
-   */
   public static function updateScenes($id) {
     // Vérifier que c'est bien un HomeHub
     if (!reolink::isHomeHub($id, 'updateScenes')) {
@@ -590,7 +587,7 @@ class reolink extends eqLogic {
       log::add('reolink', 'error', 'Commande SetScene non trouvée');
       return false;
     }
-    
+
     // Appeler l'API pour récupérer les scènes
     $endpoint = '/reolink/scenes';
     $credentials = reolink::getDeviceCredentials($id);
@@ -611,9 +608,15 @@ class reolink extends eqLogic {
         $sceneList .= ";" . $scene_id . '|' . $scene_name;
       }
     }
-    
+
     $cmd->setConfiguration('listValue', $sceneList);
     $cmd->save();
+
+    if (array_key_exists('active_scene_id', $response)) {
+      $activeSceneId = is_numeric($response['active_scene_id']) ? intval($response['active_scene_id']) : -1;
+      $device->checkAndUpdateCmd('SetSceneState', $activeSceneId);
+    }
+
     $device->refreshWidget();
     
     log::add('reolink', 'info', 'Scènes mises à jour avec succès');
@@ -644,6 +647,11 @@ class reolink extends eqLogic {
     if (!$result || !isset($result['success']) || !$result['success']) {
       log::add('reolink', 'error', 'Échec de l\'activation de la scène ' . $scene_id);
       return false;
+    }
+
+    $device = reolink::byId($id, 'reolink');
+    if (is_object($device)) {
+      $device->refreshWidget();
     }
     
     log::add('reolink', 'info', 'Scène activée : ' . $result['active_scene_name'] . ' (ID: ' . $result['active_scene_id'] . ')');
@@ -888,19 +896,18 @@ class reolink extends eqLogic {
     
     // Vérifier si c'est un HomeHub/NVR ou une caméra sous HomeHub
     $parentHubId = $camcmd->getConfiguration('parent_hub_id');
-    $isHomeHub = $camcmd->getConfiguration('is_homehub', false);
-    
-    // Si HomeHub/NVR, récupérer les données via l'API Reolink AIO
-    if (!empty($parentHubId) || $isHomeHub) {
+    $isHomeHub = $camcmd->getConfiguration('isNVR') === 'Oui';
+
+    // HomeHub : mettre à jour les scènes spécifiquement
+    if ($isHomeHub) {
+      reolink::updateScenes($id);
+    }
+
+    // Construire le bloc de commandes selon le type d'équipement
+    if (!empty($parentHubId)) {
+      // Caméra sous HomeHub - utiliser l'API reolink-aio
       log::add('reolink', 'debug', 'Rafraichissement via API Reolink AIO...');
-      
-      if ($isHomeHub) {
-        // C'est un HomeHub/NVR - pas encore implémenté
-        log::add('reolink', 'info', 'Rafraichissement HomeHub/NVR - non implémenté pour le moment');
-        return true;
-      }
-      
-      // C'est une caméra sous HomeHub
+
       $config = reolink::prepareHomeHubCredentials($id);
       if (!$config) {
         log::add('reolink', 'error', 'Impossible de préparer les credentials pour la caméra');
@@ -933,7 +940,7 @@ class reolink extends eqLogic {
       $cmd_block = [$cmd_results];
       
     } else {
-      // Méthode classique pour les caméras autonomes
+      // Caméra autonome ou HomeHub lui-même - connexion HTTP classique
       $camcnx = reolink::getReolinkConnection($id);
       $cmdget = NULL;
 
@@ -965,7 +972,7 @@ class reolink extends eqLogic {
     foreach ($cmd_block as $key => &$value) {
       // Si provient de l'API AIO, $value est déjà le tableau de résultats
       // Sinon, il faut envoyer la commande via reolinkAPI
-      if (!empty($parentHubId) || $isHomeHub) {
+      if (!empty($parentHubId)) {
         $res = $value; // Déjà les résultats de l'API
       } else {
         $cmdget = "";
@@ -1678,6 +1685,7 @@ class reolink extends eqLogic {
         log::add('reolink', 'debug', 'Commande déjà présente : ' . $command['name']);
       }
     }
+
     return $cmd_order;
   }
 

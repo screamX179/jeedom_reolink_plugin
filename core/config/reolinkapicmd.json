@@ -2123,12 +2123,22 @@
 		},
 		{
 			"abilityneed":"scene",
+			"name": "Scène active (état)",
+			"type": "info",
+			"subtype": "numeric",
+			"IsHistorized": 0,
+			"isVisible": 0,
+			"logicalId": "SetSceneState"
+		},
+		{
+			"abilityneed":"scene",
 			"name": "Activer une scène",
 			"type": "action",
 			"subtype": "select",
 			"configuration": {
 				"option": "select",
 				"listValue": "-1|Désactiver les scènes",
+				"valueFrom" : "SetSceneState",
 				"actionapi": "SetScene"
 			},
 			"IsHistorized": 0,
