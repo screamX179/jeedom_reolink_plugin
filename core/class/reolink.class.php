@@ -945,8 +945,12 @@ class reolink extends eqLogic {
       $cmdget = NULL;
 
       if ($camcnx->is_loggedin == false) {
+        $camcmd->checkAndUpdateCmd('CameraConnected', 0);
         exit();
       }
+
+      // Si on est connecté, la caméra est en ligne
+      $camcmd->checkAndUpdateCmd('CameraConnected', 1);
 
       log::add('reolink', 'debug', 'Rafraichissement des informations de la caméra...');
 
@@ -1198,6 +1202,10 @@ class reolink extends eqLogic {
             $revert_value = reolinkCmd::byEqLogicIdAndLogicalId($id, 'SetMdDefaultSensitivityState')->getConfiguration('revertvalue', 0);
             $mdsensdef = $revert_value - $json_data['value']['MdAlarm']['newSens']['sensDef'];
             $camcmd->checkAndUpdateCmd('SetMdDefaultSensitivityState', $mdsensdef);
+            break;
+
+          case reolinkAPI::CAM_GET_CHANNELSTATUS:
+            $camcmd->checkAndUpdateCmd('CameraConnected', $json_data['value']['online'] ? 1 : 0);
             break;
 
           case reolinkAPI::CAM_GET_AIALARM:

@@ -110,6 +110,35 @@ try {
             }
         }
 
+    } elseif (isset($result['message']) && $result['message'] == 'channel_status') {
+        // ── Mode Baichuan : événement channel status (cmd_id 145) ──
+        $plugin = plugin::byId('reolink');
+        $eqLogics = eqLogic::byType($plugin->getId());
+        $eventChannel = isset($result['channel']) ? intval($result['channel']) : null;
+
+        foreach ($eqLogics as $eqLogic) {
+            if ($eqLogic->getConfiguration('isNVR') === 'Oui') {
+              continue;
+            }
+
+            $camera_contact_point = $eqLogic->getConfiguration('adresseip');
+            $camera_channel = intval($eqLogic->getConfiguration('defined_channel', 0));
+
+            if (filter_var($camera_contact_point, FILTER_VALIDATE_IP)) {
+              $camera_ip = $camera_contact_point;
+            } else {
+              $camera_ip = gethostbyname($camera_contact_point);
+            }
+
+            $ip_match = ($camera_ip == $result['ip']);
+            $channel_match = ($eventChannel === null) || ($camera_channel == $eventChannel);
+
+            if ($ip_match && $channel_match) {
+              $eqLogic->checkAndUpdateCmd('CameraConnected', $result['online']);
+              log::add('reolink', 'debug', 'Cam IP='.$result['ip'].' Ch='.$camera_channel.' channel_status: online=' . $result['online']);
+            }
+        }
+
     } elseif (isset($result['message']) && $result['message'] == 'subscription') {
         if ($result['state'] == 0) {
           $title = 'Plugin Reolink';

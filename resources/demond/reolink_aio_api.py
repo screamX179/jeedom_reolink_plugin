@@ -826,11 +826,22 @@ async def refresh_camera_info(channel_id: int, credentials: HomeHubCredentials):
         if channel_id not in host.channels:
             raise HTTPException(status_code=404, detail=f"Canal {channel_id} non trouvé")
         
-        if not host.camera_online(channel_id):
-            raise HTTPException(status_code=503, detail=f"La caméra du canal {channel_id} est hors ligne")
+        camera_online = host.camera_online(channel_id)
         
         # Format compatible avec refreshNFO : array de commandes
         commands = []
+        
+        # Channel status - toujours inclus, même si la caméra est hors ligne
+        commands.append({
+            'cmd': 'Getchannelstatus',
+            'value': {
+                'online': 1 if camera_online else 0
+            }
+        })
+        
+        if not camera_online:
+            logging.warning(f"Caméra canal {channel_id} hors ligne, retour partiel (status uniquement)")
+            return commands
         
         # Recording settings - format CAM_GET_RECV20
         if host.supported(channel_id, "recording"):

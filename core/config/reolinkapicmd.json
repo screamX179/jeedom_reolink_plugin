@@ -10,6 +10,15 @@
 			"logicalId": "refresh"
 		},
 		{
+			"abilityneed":"none",
+			"name": "Connectée (état)",
+			"type": "info",
+			"subtype": "binary",
+			"IsHistorized": 0,
+			"isVisible": 1,
+			"logicalId": "CameraConnected"
+		},
+		{
 			"abilityneed":"reboot",
 			"name": "Redémarrer",
 			"type": "action",

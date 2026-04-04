@@ -175,6 +175,18 @@ async def register_channel_status_monitoring(session_key: str, cam_config: dict)
                     for ch in host.channels
                 }
                 logging.info('Channel status event (cmd_id 145) for %s: %s', session_key, status)
+                
+                # Envoyer le statut de connexion à Jeedom pour chaque canal
+                camera_ip = session_key.split(':')[0]
+                for ch, ch_status in status.items():
+                    event_data = {
+                        'message': 'channel_status',
+                        'ip': camera_ip,
+                        'channel': ch,
+                        'online': 1 if ch_status['online'] else 0
+                    }
+                    jeedom_cnx.send_change_immediate(event_data)
+                    logging.debug('Channel status sent for %s channel %d: online=%s', session_key, ch, ch_status['online'])
             except Exception as e:
                 logging.error('Error refreshing channel status for %s: %s', session_key, e)
         
