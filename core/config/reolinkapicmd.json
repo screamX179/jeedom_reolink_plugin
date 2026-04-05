@@ -14,7 +14,7 @@
 			"name": "Connectée (état)",
 			"type": "info",
 			"subtype": "binary",
-			"IsHistorized": 0,
+			"IsHistorized": 1,
 			"isVisible": 1,
 			"logicalId": "CameraConnected"
 		},
