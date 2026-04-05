@@ -95,6 +95,11 @@ async def _on_session_created(session_key: str):
 camera_sessions.register_session_created_callback(_on_session_created)
 
 
+# ── Channel status lock per session ──────────────────────────────
+_channel_status_locks: Dict[str, asyncio.Lock] = {}
+_channel_status_pending: Dict[str, bool] = {}
+
+
 async def _execute_camera_command(camera_name, cameras, command_name, api_call):
     """Generic helper to execute camera commands with standard error handling.
     
@@ -144,8 +149,9 @@ async def _execute_camera_command(camera_name, cameras, command_name, api_call):
 async def register_channel_status_monitoring(session_key: str, cam_config: dict):
     """Register callback to log channel status changes (cmd_id 145) for a host session.
     
-    Le callback lit directement l'état interne du Host (mis à jour par reolink_aio
-    avant le fire du callback) sans faire de refresh/recreation de session.
+    Le callback utilise un lock + pending :
+    - Si aucun refresh en cours → on lance le refresh
+    - Si un refresh est en cours → on marque pending, il sera relancé à la fin
     
     Args:
         session_key: Session cache key (host:port)
@@ -158,39 +164,50 @@ async def register_channel_status_monitoring(session_key: str, cam_config: dict)
     
     host = session_data['host']
     callback_id = f'channel_status_{session_key}'
+
+    if session_key not in _channel_status_locks:
+        _channel_status_locks[session_key] = asyncio.Lock()
     
     def _on_channel_status():
-        """Callback synchrone déclenché par reolink_aio sur event cmd_id 145.
-        
-        Le push 145 met à jour _sleep (sleeping/standby) mais PAS _channel_online.
-        On lance un get_host_data() sur le Host existant pour rafraîchir _channel_online
-        (GetChannelStatus) sans recréer la session (ce qui causerait une boucle infinie).
-        """
-        async def _refresh_channel_status():
-            try:
-                logging.debug('Refreshing channel status for %s', session_key)
-                await host.get_host_data()
-                status = {
-                    ch: {'online': host.camera_online(ch), 'sleeping': host.sleeping(ch)}
-                    for ch in host.channels
-                }
-                logging.info('Channel status event (cmd_id 145) for %s: %s', session_key, status)
-                
-                # Envoyer le statut de connexion à Jeedom pour chaque canal
-                camera_ip = session_key.split(':')[0]
-                for ch, ch_status in status.items():
-                    event_data = {
-                        'message': 'channel_status',
-                        'ip': camera_ip,
-                        'channel': ch,
-                        'online': 1 if ch_status['online'] else 0
-                    }
-                    jeedom_cnx.send_change_immediate(event_data)
-                    logging.debug('Channel status sent for %s channel %d: online=%s', session_key, ch, ch_status['online'])
-            except Exception as e:
-                logging.error('Error refreshing channel status for %s: %s', session_key, e)
-        
-        asyncio.get_event_loop().create_task(_refresh_channel_status())
+        """Callback synchrone déclenché par reolink_aio sur event cmd_id 145."""
+        lock = _channel_status_locks[session_key]
+
+        if lock.locked():
+            _channel_status_pending[session_key] = True
+            logging.debug('Channel status refresh in progress for %s, marked pending', session_key)
+            return
+
+        async def _do_refresh():
+            async with lock:
+                while True:
+                    _channel_status_pending[session_key] = False
+                    try:
+                        logging.debug('Refreshing channel status for %s', session_key)
+                        await host.get_host_data()
+                        status = {
+                            ch: {'online': host.camera_online(ch), 'sleeping': host.sleeping(ch)}
+                            for ch in host.channels
+                        }
+                        logging.info('Channel status event (cmd_id 145) for %s: %s', session_key, status)
+                        
+                        camera_ip = session_key.split(':')[0]
+                        for ch, ch_status in status.items():
+                            event_data = {
+                                'message': 'channel_status',
+                                'ip': camera_ip,
+                                'channel': ch,
+                                'online': 1 if ch_status['online'] else 0
+                            }
+                            jeedom_cnx.send_change_immediate(event_data)
+                            logging.debug('Channel status sent for %s channel %d: online=%s', session_key, ch, ch_status['online'])
+                    except Exception as e:
+                        logging.error('Error refreshing channel status for %s: %s', session_key, e)
+
+                    if not _channel_status_pending.get(session_key, False):
+                        break
+                    logging.debug('Channel status pending for %s, refreshing again', session_key)
+
+        asyncio.get_event_loop().create_task(_do_refresh())
     
     host.baichuan.register_callback(
         callback_id=callback_id,
