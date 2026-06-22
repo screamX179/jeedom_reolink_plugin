@@ -140,8 +140,8 @@ $eqLogics = eqLogic::byType($plugin->getId());
 								</div>
 							</div>
 							<div class="form-group">
-								<label class="col-sm-3 control-label">{{Port HTTP/HTTPS}}
-									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le port de l'interface web de la caméra uniquement si vous l'avez modifier. Sinon laisser ce champ vide}}"></i></sup>
+								<label class="col-sm-3 control-label">{{Port HTTP/HTTPS/AIO}}
+									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le port de l'interface web de la caméra uniquement si vous l'avez modifier. Sinon laisser ce champ vide. Possible de saisir le media port dans le cas d'une connexion via API AIO.}}"></i></sup>
 								</label>
 								<div class="col-sm-7">
 									<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="port" placeholder="{{(facultatif)}}"/>
@@ -181,11 +181,12 @@ $eqLogics = eqLogic::byType($plugin->getId());
 							</div>
 							<div class="form-group">
 									<label class="col-sm-3 control-label">{{Type de connexion}}
-										<sup><i class="fas fa-question-circle tooltips" title="{{Type de connexion pour se connecter à la caméra, attention HTTPS doit être activé sur la caméra pour fonctionner}}"></i></sup></label>
+										<sup><i class="fas fa-question-circle tooltips" title="{{Type de connexion pour se connecter à la caméra, attention HTTPS doit être activé sur la caméra pour fonctionner ou le media port pour l'API AIO}}"></i></sup></label>
 									<div class="col-sm-3">
 											<select class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="cnxtype">
 													<option value="http">{{HTTP}}</option>
 													<option value="https">{{HTTPS}}</option>
+													<option value="aio">{{API AIO}}</option>
 											</select>
 									</div>
 							</div>

@@ -38,6 +38,7 @@ class HomeHubCredentials(BaseModel):
     password: str
     port: int = 80
     use_https: bool = False
+    bc_only: bool = False
 
 class CameraInfo(BaseModel):
     """Informations d'une caméra"""
@@ -102,7 +103,8 @@ async def get_homehub_session(credentials: HomeHubCredentials, refresh: bool = F
         username=credentials.username,
         password=credentials.password,
         port=credentials.port,
-        refresh=refresh
+        refresh=refresh,
+        bc_only=credentials.bc_only
     )
 
     if not host:
@@ -1101,6 +1103,94 @@ async def refresh_camera_info(channel_id: int, credentials: HomeHubCredentials):
     except Exception as e:
         logging.error(f"Erreur lors de la récupération des infos de configuration caméra {channel_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+class CameraCommandRequest(HomeHubCredentials):
+    """Requête de commande générique (Set.../PtzCtrl/Reboot/Get...) vers une caméra.
+
+    Hérite des identifiants de connexion (host, username, password, port, use_https,
+    bc_only) et y ajoute la commande Reolink à exécuter.
+    """
+    cmd: str
+    action: int = 0
+    param: dict = {}
+
+
+def normalize_command_response(cmd: str, json_data):
+    """Normalise la réponse de reolink-aio vers le format attendu par le plugin PHP.
+
+    Le plugin vérifie `response[0]["value"]["rspCode"] == 200`. Or, lorsque reolink-aio
+    utilise le repli Baichuan (caméras sans API HTTP), les éléments de réponse ont la
+    forme {"cmd":..., "Baichuan_fallback_succes": True, "code": 1, "error": {...}} sans
+    bloc `value`. On normalise donc ces réponses (et les réponses HTTP code==0) pour
+    exposer un `value.rspCode = 200` cohérent.
+    """
+    if not isinstance(json_data, list):
+        return json_data
+
+    for item in json_data:
+        if not isinstance(item, dict):
+            continue
+        success = item.get("Baichuan_fallback_succes") is True or item.get("code") == 0
+        if success:
+            item["code"] = 0
+            value = item.get("value")
+            if not isinstance(value, dict):
+                value = {}
+            value.setdefault("rspCode", 200)
+            item["value"] = value
+    return json_data
+
+
+@app.post("/reolink/camera/{channel_id}/command")
+async def camera_command(channel_id: int, request: CameraCommandRequest):
+    """Exécute une commande Reolink générique sur une caméra via reolink-aio.
+
+    Fonctionne aussi bien pour les caméras sous HomeHub/NVR que pour les caméras
+    autonomes en mode "API AIO" (Baichuan uniquement, sans API HTTP) : reolink-aio
+    bascule automatiquement sur le protocole Baichuan lorsque l'API HTTP n'est pas
+    disponible.
+    """
+    credentials = HomeHubCredentials(
+        host=request.host,
+        username=request.username,
+        password=request.password,
+        port=request.port,
+        use_https=request.use_https,
+        bc_only=request.bc_only,
+    )
+
+    try:
+        host = await get_homehub_session(credentials)
+
+        body = [{
+            "cmd": request.cmd,
+            "action": request.action,
+            "param": request.param or {},
+        }]
+
+        logging.info(
+            "Commande %s (action=%s) canal %s vers %s",
+            request.cmd, request.action, channel_id,
+            mask_credentials_for_log(credentials),
+        )
+
+        json_data = await host.send(body, {"cmd": request.cmd}, expected_response_type="json")
+        return normalize_command_response(request.cmd, json_data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(
+            "Erreur lors de l'exécution de la commande %s (canal %s): %s",
+            request.cmd, channel_id, str(e),
+        )
+        # Retourne un format d'erreur exploitable par le plugin (HTTP 200, code != 0)
+        return [{
+            "cmd": request.cmd,
+            "code": 1,
+            "value": {"rspCode": -1},
+            "error": {"detail": str(e), "rspCode": -1},
+        }]
+
 
 @app.get("/health")
 async def health_check():

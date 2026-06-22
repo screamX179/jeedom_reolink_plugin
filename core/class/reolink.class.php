@@ -47,10 +47,9 @@ class reolink extends eqLogic {
   public static function TryConnect($id) {
     $camera = reolink::byId($id, 'reolink');
     
-    // Vérifier si c'est une caméra sous HomeHub
-    $parentHubId = $camera->getConfiguration('parent_hub_id');
-    if (!empty($parentHubId)) {
-      log::add('reolink', 'info', 'Test de connexion à la caméra HomeHub via API (ID: ' . $id . ', Parent Hub ID: ' . $parentHubId . ')');
+    // Vérifier si on doit passer par l'API reolink-aio (caméra sous HomeHub ou mode "API AIO")
+    if (reolink::usesAioApi($id)) {
+      log::add('reolink', 'info', 'Test de connexion via l\'API reolink-aio (ID: ' . $id . ')');
       return reolink::TryConnectHomeHubCamera($id);
     }
     
@@ -127,6 +126,101 @@ class reolink extends eqLogic {
       'port' => intval($device->getConfiguration('port', 80)),
       'use_https' => $device->getConfiguration('cnxtype') == 'https'
     );
+  }
+
+  /**
+   * Détermine si un équipement doit utiliser l'API reolink-aio (daemon Baichuan)
+   * plutôt que l'API HTTP directe.
+   * C'est le cas pour :
+   *  - les caméras rattachées à un HomeHub/NVR (parent_hub_id défini)
+   *  - les caméras autonomes configurées en mode "API AIO" (cnxtype == 'aio'),
+   *    typiquement les caméras qui n'exposent pas de protocole HTTP (Baichuan only).
+   * @param int $id ID de l'équipement
+   * @return bool
+   */
+  public static function usesAioApi($id) {
+    $device = reolink::byId($id, 'reolink');
+    if (!is_object($device)) {
+      return false;
+    }
+    if (!empty($device->getConfiguration('parent_hub_id'))) {
+      return true;
+    }
+    if ($device->getConfiguration('cnxtype') === 'aio') {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Prépare la configuration (canal + credentials) pour un appel à l'API reolink-aio,
+   * que l'équipement soit une caméra sous HomeHub ou une caméra autonome en mode "API AIO".
+   * @param int $id ID de l'équipement
+   * @return array|false ['channel_id' => int, 'credentials' => array] ou false
+   */
+  public static function getAioApiConfig($id) {
+    $device = reolink::byId($id, 'reolink');
+    if (!is_object($device)) {
+      return false;
+    }
+
+    // Caméra rattachée à un HomeHub : on utilise les credentials du hub parent
+    if (!empty($device->getConfiguration('parent_hub_id'))) {
+      return reolink::prepareHomeHubCredentials($id);
+    }
+
+    // Caméra autonome en mode "API AIO" : connexion directe via reolink-aio/Baichuan
+    $port = $device->getConfiguration('port');
+    if ($port === '' || $port === null || !is_numeric($port)) {
+      $port = 9000; // media port Baichuan par défaut
+    }
+
+    $channelId = $device->getConfiguration('defined_channel');
+    if ($channelId === '' || $channelId === null) {
+      $channelId = 0;
+    }
+
+    return array(
+      'channel_id' => intval($channelId),
+      'credentials' => array(
+        'host' => $device->getConfiguration('adresseip'),
+        'username' => $device->getConfiguration('login'),
+        'password' => $device->getConfiguration('password'),
+        'port' => intval($port),
+        'use_https' => false,
+        'bc_only' => true
+      )
+    );
+  }
+
+  /**
+   * Envoie une commande "action" (Set.../PtzCtrl/Reboot/Get...) à une caméra via l'API
+   * reolink-aio (daemon Baichuan). Utilisé pour les caméras autonomes en mode "API AIO"
+   * ou les caméras sous HomeHub qui ne disposent pas d'un accès HTTP direct.
+   * @param int $id ID de l'équipement
+   * @param string $cmd Nom de la commande Reolink (ex: SetIrLights)
+   * @param mixed $param Paramètre de la commande (tableau associatif déjà décodé)
+   * @param int $action Valeur du champ "action" Reolink (0 par défaut)
+   * @return array|false Réponse au format Reolink ([{"cmd":..,"value":{"rspCode":200}}]) ou false
+   */
+  public static function sendAioCommand($id, $cmd, $param, $action = 0) {
+    $config = reolink::getAioApiConfig($id);
+    if (!$config) {
+      log::add('reolink', 'error', 'sendAioCommand: impossible de préparer la configuration AIO pour l\'équipement ' . $id);
+      return false;
+    }
+
+    $payload = array_merge(
+      $config['credentials'],
+      array(
+        'cmd' => $cmd,
+        'action' => intval($action),
+        'param' => ($param === null ? new stdClass() : $param)
+      )
+    );
+
+    $endpoint = '/reolink/camera/' . $config['channel_id'] . '/command';
+    return reolink::callReolinkAioAPI($endpoint, $payload, 60);
   }
 
   /**
@@ -221,7 +315,7 @@ class reolink extends eqLogic {
    * Teste la connexion à une caméra via l'API HomeHub
    */
   private static function TryConnectHomeHubCamera($id) {
-    $config = reolink::prepareHomeHubCredentials($id);
+    $config = reolink::getAioApiConfig($id);
     if (!$config) {
       return false;
     }
@@ -343,9 +437,9 @@ class reolink extends eqLogic {
    * Récupère les informations d'une caméra via l'API HomeHub
    */
   private static function GetCamNFOFromHomeHub($id) {
-    log::add('reolink', 'debug', 'Récupération des informations via API HomeHub');
+    log::add('reolink', 'debug', 'Récupération des informations via l\'API reolink-aio');
     
-    $config = reolink::prepareHomeHubCredentials($id);
+    $config = reolink::getAioApiConfig($id);
     if (!$config) {
       return false;
     }
@@ -392,15 +486,14 @@ class reolink extends eqLogic {
     log::add('reolink', 'debug', 'Obtention des informations de la caméra');
     $camera = reolink::byId($id, 'reolink');
 
-    // Vérifier si c'est une caméra sous HomeHub
-    $parentHubId = $camera->getConfiguration('parent_hub_id');
-    if (!empty($parentHubId)) {
-      log::add('reolink', 'info', 'Caméra sous HomeHub détectée, utilisation de l\'API reolink-aio');
+    // Vérifier si on doit passer par l'API reolink-aio (caméra sous HomeHub ou mode "API AIO")
+    if (reolink::usesAioApi($id)) {
+      log::add('reolink', 'info', 'Récupération des informations via l\'API reolink-aio');
       return reolink::GetCamNFOFromHomeHub($id);
     }
 
     // Sinon, utiliser la méthode classique par connexion directe
-    log::add('reolink', 'debug', 'Caméra autonome, connexion directe');
+    log::add('reolink', 'debug', 'Caméra autonome (HTTP), connexion directe');
     
     // Devices Info
     $reolinkConn = reolink::getReolinkConnection($id);
@@ -463,7 +556,7 @@ class reolink extends eqLogic {
   private static function GetCamAbilityFromHomeHub($id) {
     log::add('reolink', 'debug', 'Récupération des capacités via API HomeHub');
     
-    $config = reolink::prepareHomeHubCredentials($id);
+    $config = reolink::getAioApiConfig($id);
     if (!$config) {
       return false;
     }
@@ -506,22 +599,20 @@ class reolink extends eqLogic {
     log::add('reolink', 'debug', 'Interrogation de la caméra sur ses capacités hardware/software...');
     $camera = reolink::byId($id, 'reolink');
     
-    // Vérifier si c'est une caméra sous HomeHub
-    $parentHubId = $camera->getConfiguration('parent_hub_id');
-    if (!empty($parentHubId)) {
-      log::add('reolink', 'info', 'Caméra sous HomeHub détectée, utilisation de l\'API reolink-aio');
-      return reolink::GetCamAbilityFromHomeHub($id);
-    }
-    
-    // Vérifier si c'est un HomeHub lui-même
-    $isNVR = $camera->getConfiguration('isNVR');
-    if ($isNVR === 'Oui') {
+    // Vérifier si c'est un HomeHub/NVR lui-même (interrogé via l'endpoint NVR dédié)
+    if ($camera->getConfiguration('isNVR') === 'Oui' && empty($camera->getConfiguration('parent_hub_id'))) {
       log::add('reolink', 'info', 'HomeHub/NVR détecté, utilisation de l\'API reolink-aio');
       return reolink::GetHomeHubAbility($id);
     }
     
+    // Caméra sous HomeHub ou caméra autonome en mode "API AIO"
+    if (reolink::usesAioApi($id)) {
+      log::add('reolink', 'info', 'Récupération des capacités via l\'API reolink-aio');
+      return reolink::GetCamAbilityFromHomeHub($id);
+    }
+    
     // Sinon, utiliser la méthode classique par connexion directe
-    log::add('reolink', 'debug', 'Caméra autonome, connexion directe');
+    log::add('reolink', 'debug', 'Caméra autonome (HTTP), connexion directe');
     $reolinkConn = reolink::getReolinkConnection($id);
 
     $username = $camera->getConfiguration('login');
@@ -898,17 +989,25 @@ class reolink extends eqLogic {
     $parentHubId = $camcmd->getConfiguration('parent_hub_id');
     $isHomeHub = $camcmd->getConfiguration('isNVR') === 'Oui';
 
+    // Déterminer si on passe par l'API reolink-aio (daemon Baichuan).
+    // C'est le cas pour les caméras sous HomeHub et les caméras autonomes en mode "API AIO".
+    // Un HomeHub/NVR lui-même continue d'utiliser la voie HTTP/NVR classique.
+    $useAio = reolink::usesAioApi($id);
+    if ($useAio && $isHomeHub && empty($parentHubId)) {
+      $useAio = false;
+    }
+
     // HomeHub : mettre à jour les scènes spécifiquement
     if ($isHomeHub) {
       reolink::updateScenes($id);
     }
 
     // Construire le bloc de commandes selon le type d'équipement
-    if (!empty($parentHubId)) {
-      // Caméra sous HomeHub - utiliser l'API reolink-aio
+    if ($useAio) {
+      // Caméra sous HomeHub ou caméra autonome (API AIO) - utiliser l'API reolink-aio
       log::add('reolink', 'debug', 'Rafraichissement via API Reolink AIO...');
 
-      $config = reolink::prepareHomeHubCredentials($id);
+      $config = reolink::getAioApiConfig($id);
       if (!$config) {
         log::add('reolink', 'error', 'Impossible de préparer les credentials pour la caméra');
         return false;
@@ -976,7 +1075,7 @@ class reolink extends eqLogic {
     foreach ($cmd_block as $key => &$value) {
       // Si provient de l'API AIO, $value est déjà le tableau de résultats
       // Sinon, il faut envoyer la commande via reolinkAPI
-      if (!empty($parentHubId)) {
+      if ($useAio) {
         $res = $value; // Déjà les résultats de l'API
       } else {
         $cmdget = "";
@@ -1754,9 +1853,16 @@ class reolinkCmd extends cmd {
         reolink::refreshNFO($EqId);
         break;
       case 'GetPtzPreset':
-        $camcnx = reolink::getReolinkConnection($EqId);
-        $data = $camcnx->SendCMD('[{"cmd":"GetPtzPreset","action":1,"param":{"channel":' . $channel . '}}]');
-        reolink::updatePTZpreset($EqId, $data[0]);
+        if (reolink::usesAioApi($EqId)) {
+          $data = reolink::sendAioCommand($EqId, 'GetPtzPreset', array('channel' => intval($channel)), 1);
+          if (is_array($data) && isset($data[0])) {
+            reolink::updatePTZpreset($EqId, $data[0]);
+          }
+        } else {
+          $camcnx = reolink::getReolinkConnection($EqId);
+          $data = $camcnx->SendCMD('[{"cmd":"GetPtzPreset","action":1,"param":{"channel":' . $channel . '}}]');
+          reolink::updatePTZpreset($EqId, $data[0]);
+        }
         break;
       case 'GetScenes':
         reolink::updateScenes($EqId);
@@ -1774,7 +1880,6 @@ class reolinkCmd extends cmd {
         reolink::disableMotionDetection($EqId);
         break;
       default:
-        $camcnx = reolink::getReolinkConnection($EqId);
         // Speed NFO
         $cmd = reolinkCmd::byEqLogicIdAndLogicalId($EqId, "SetSpeed");
         if (is_object($cmd)) {
@@ -1796,13 +1901,22 @@ class reolinkCmd extends cmd {
           $payload = str_replace('#OPTR_SLIDER#', abs($revert_value - intval($_options['slider'])), $payload);
           $payload = str_replace('#CHANNEL#', $channel, $payload);
           $payload = str_replace('#SPEED#', $speed, $payload);
-          $payload = '[{"cmd":"' . $actionAPI . '","param":' . $payload . '}]';
 
-          log::add('reolink', 'debug', 'Payload avec paramètre utilisateur demandé = ' . $payload);
-
-          $camresp = $camcnx->SendCMD($payload);
+          // $payload contient maintenant le paramètre de la commande (objet "param")
+          if (reolink::usesAioApi($EqId)) {
+            // Caméra autonome (API AIO) ou sous HomeHub : envoi via le daemon reolink-aio/Baichuan
+            $paramDecoded = json_decode($payload, true);
+            log::add('reolink', 'debug', 'Commande AIO ' . $actionAPI . ' param = ' . $payload);
+            $camresp = reolink::sendAioCommand($EqId, $actionAPI, $paramDecoded);
+          } else {
+            // Connexion HTTP directe
+            $camcnx = reolink::getReolinkConnection($EqId);
+            $fullPayload = '[{"cmd":"' . $actionAPI . '","param":' . $payload . '}]';
+            log::add('reolink', 'debug', 'Payload avec paramètre utilisateur demandé = ' . $fullPayload);
+            $camresp = $camcnx->SendCMD($fullPayload);
+          }
           // Check return and update CMD State
-          if ($camresp[0]["value"]["rspCode"] == 200) {
+          if (is_array($camresp) && isset($camresp[0]["value"]["rspCode"]) && $camresp[0]["value"]["rspCode"] == 200) {
             log::add('reolink', 'debug', 'OK > Action réalisé avec succès sur la caméra');
 
             if (!empty($linkedvalue)) {

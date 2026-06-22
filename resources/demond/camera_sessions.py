@@ -47,9 +47,17 @@ async def _get_camera_lock(camera_key):
             _connection_locks[camera_key] = asyncio.Lock()
         return _connection_locks[camera_key]
 
-async def _create_and_cache_session(camera_key, host, username, password, port=9000):
-    """Create a Host session, fetch data, and cache it with LRU eviction."""
-    api = Host(host, username, password, port=port)
+async def _create_and_cache_session(camera_key, host, username, password, port=9000, bc_only=False):
+    """Create a Host session, fetch data, and cache it with LRU eviction.
+
+    When bc_only is True the camera is reached only through the Baichuan
+    protocol (standalone cameras without HTTP/HTTPS API): the given port is
+    used as the Baichuan media port.
+    """
+    if bc_only:
+        api = Host(host, username, password, bc_port=port, bc_only=True)
+    else:
+        api = Host(host, username, password, port=port)
     await asyncio.wait_for(api.get_host_data(), timeout=20.0)
 
     camera_sessions[camera_key] = {
@@ -72,7 +80,7 @@ async def _create_and_cache_session(camera_key, host, username, password, port=9
 
     return api
 
-async def get_camera_session(camera_key, host, username, password, port=9000, refresh=False):
+async def get_camera_session(camera_key, host, username, password, port=9000, refresh=False, bc_only=False):
     """Get or create a camera session, with optional host-data refresh and atomic recreation.
 
     Args:
@@ -85,6 +93,8 @@ async def get_camera_session(camera_key, host, username, password, port=9000, re
                     atomically when new devices are detected. Concurrent callers that
                     arrive while a recreation is already in progress will reuse the
                     already-recreated session instead of triggering redundant reconnections.
+        bc_only:    If True, connect using only the Baichuan protocol (standalone
+                    cameras without HTTP API); the port is used as Baichuan media port.
 
     Returns:
         Host API object, or None if the connection fails.
@@ -114,7 +124,7 @@ async def get_camera_session(camera_key, host, username, password, port=9000, re
         else:
             try:
                 logging.debug('Creating new session for %s', camera_key)
-                api = await _create_and_cache_session(camera_key, host, username, password, port)
+                api = await _create_and_cache_session(camera_key, host, username, password, port, bc_only=bc_only)
                 logging.info('Camera %s session established and cached', camera_key)
             except asyncio.TimeoutError:
                 logging.error('Timeout connecting to camera %s', camera_key)
@@ -155,7 +165,7 @@ async def get_camera_session(camera_key, host, username, password, port=9000, re
 
             previous_host = current['host'] if current else None
             try:
-                api = await _create_and_cache_session(camera_key, host, username, password, port)
+                api = await _create_and_cache_session(camera_key, host, username, password, port, bc_only=bc_only)
                 if previous_host and previous_host is not api:
                     try:
                         await previous_host.logout()
