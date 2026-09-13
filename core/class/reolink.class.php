@@ -50,7 +50,13 @@ class reolink extends eqLogic {
     // Vérifier si on doit passer par l'API reolink-aio (caméra sous HomeHub ou mode "API AIO")
     if (reolink::usesAioApi($id)) {
       log::add('reolink', 'info', 'Test de connexion via l\'API reolink-aio (ID: ' . $id . ')');
-      return reolink::TryConnectHomeHubCamera($id);
+      // Caméra sous HomeHub : vérifier explicitement le canal rattaché
+      if (!empty($camera->getConfiguration('parent_hub_id'))) {
+        return reolink::TryConnectHomeHubCamera($id);
+      }
+
+      // Caméra autonome en mode API AIO (Baichuan only): test direct de la session
+      return reolink::TryConnectAioStandalone($id);
     }
     
     // Sinon, utiliser la méthode classique
@@ -334,6 +340,33 @@ class reolink extends eqLogic {
       log::add('reolink', 'info', 'Échec connexion caméra: ' . $result['error']);
       return false;
     }
+  }
+
+  /**
+   * Teste la connexion à une caméra autonome en mode API AIO.
+   * Ce test ne dépend pas d'un mapping de canal HomeHub.
+   */
+  private static function TryConnectAioStandalone($id) {
+    $config = reolink::getAioApiConfig($id);
+    if (!$config || !isset($config['credentials'])) {
+      log::add('reolink', 'error', 'Configuration AIO invalide pour le test de connexion (ID: ' . $id . ')');
+      return false;
+    }
+
+    $result = reolink::callReolinkAioAPI('/reolink/test-connection', $config['credentials']);
+    if (!$result || !isset($result['success'])) {
+      log::add('reolink', 'error', 'Réponse invalide du test de connexion AIO (ID: ' . $id . ')');
+      return false;
+    }
+
+    if ($result['success'] === true) {
+      log::add('reolink', 'info', 'Connexion AIO caméra autonome réussie (ID: ' . $id . ')');
+      return true;
+    }
+
+    $error = isset($result['error']) ? $result['error'] : 'erreur inconnue';
+    log::add('reolink', 'warning', 'Échec connexion AIO caméra autonome (ID: ' . $id . ') - ' . $error);
+    return false;
   }
 
   /**
@@ -1351,6 +1384,11 @@ class reolink extends eqLogic {
   /*     * ***********************Methode static*************************** */
 
   public static function cron() {
+    // Le hub Reolink est indisponible le dimanche à 2h00 (maintenance) : on saute le refresh sur ce créneau
+    if (date('w') == 0 && date('G') == 2 && date('i') < 15) {
+      log::add('reolink', 'debug', '#### CRON refresh ignoré (dimanche 2h00, maintenance hub)');
+      return;
+    }
     $eqLogics = eqLogic::byType('reolink', true);
     /** @var reolink */
     foreach ($eqLogics as $camera) {
