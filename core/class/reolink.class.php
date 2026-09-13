@@ -1252,6 +1252,11 @@ class reolink extends eqLogic {
   /*     * ***********************Methode static*************************** */
 
   public static function cron() {
+    // Le hub Reolink est indisponible le dimanche à 2h00 (maintenance) : on saute le refresh sur ce créneau
+    if (date('w') == 0 && date('G') == 2 && date('i') < 15) {
+      log::add('reolink', 'debug', '#### CRON refresh ignoré (dimanche 2h00, maintenance hub)');
+      return;
+    }
     $eqLogics = eqLogic::byType('reolink', true);
     /** @var reolink */
     foreach ($eqLogics as $camera) {
@@ -1278,6 +1283,11 @@ class reolink extends eqLogic {
 
   // Fonction exécutée automatiquement toutes les 10 minutes par Jeedom
   public static function cron10() {
+    // Le hub Reolink est indisponible le dimanche à 2h00 (maintenance) : on saute le créneau
+    if (date('w') == 0 && date('G') == 2 && date('i') < 15) {
+      log::add('reolink', 'debug', '#### CRON10 ignoré (dimanche 2h00, maintenance hub)');
+      return;
+    }
     // Refresh motion detection subscription
     $detection_mode = config::byKey('detection_mode', __CLASS__, 'onvif');
     
