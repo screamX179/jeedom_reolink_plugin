@@ -271,26 +271,22 @@ async def get_camera_full_info(channel_id: int, credentials: HomeHubCredentials)
 @app.post("/reolink/test-connection")
 async def test_connection(credentials: HomeHubCredentials):
     """
-    Teste la connexion à un HomeHub/NVR
+    Teste la connexion à un HomeHub/NVR ou à une caméra autonome.
+
+    Utilise get_homehub_session afin de respecter le mode bc_only (caméras
+    autonomes en "API AIO" / Baichuan-only sur le media port), au lieu de
+    forcer une connexion HTTP qui échouerait sur ces caméras.
     """
     try:
-        host = Host(
-            credentials.host,
-            credentials.username,
-            credentials.password,
-            port=credentials.port,
-            use_https=credentials.use_https
-        )
-        
-        await host.get_host_data()
-        
+        host = await get_homehub_session(credentials)
+
         return {
             "success": True,
             "is_nvr": host.is_nvr,
             "model": host.nvr_model if host.is_nvr else host.camera_model(0),
             "firmware": host.sw_version
         }
-        
+
     except Exception as e:
         logging.error(f"Échec du test de connexion: {str(e)}")
         return {
